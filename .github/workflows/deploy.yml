@@ -38,13 +38,13 @@ jobs:
           cd angular-realworld-example-app
           yarn install
           yarn ng build -- -c production
-          ls dist/angular-conduit
+          ls dist/angular-conduit/browser
         # TODO clean previous
 
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v3
         with:
-          path: './angular-realworld-example-app/dist/angular-conduit'
+          path: './angular-realworld-example-app/dist/angular-conduit/browser'
 
       - name: Deploy to GitHub Pages
         id: deployment
