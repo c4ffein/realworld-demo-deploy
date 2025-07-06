@@ -118,6 +118,8 @@ NAIVE_SIZE_SESSION_ARTICLE = NAIVE_SIZE_ARTICLE * MAX_ARTICLES_PER_SESSION
 NAIVE_SIZE_SESSION_COMMENT = NAIVE_SIZE_COMMENT * MAX_COMMENTS_PER_SESSION
 NAIVE_SIZE_SESSION = NAIVE_SIZE_SESSION_USER + NAIVE_SIZE_SESSION_ARTICLE + NAIVE_SIZE_SESSION_COMMENT
 NAIVE_SIZE_TOTAL = NAIVE_SIZE_SESSION * MAX_SESSIONS
+# populate demo data
+POPULATE_DEMO_DATA = getenv("POPULATE_DEMO_DATA", "FALSE").lower() == "true"
 
 
 #### LOGGING ###########################################################################################################
@@ -176,6 +178,202 @@ lifecycle_logger = logging.getLogger("lifecycle")
 def log_structured(logger, level, message, category=None, **extra_data_fields):
     """Helper function to log structured data as JSON"""
     logger.log(level, message, extra={"category": category or "general", "data": extra_data_fields})
+
+
+#### HELPERS ###########################################################################################################
+
+
+def format_datetime(dt: datetime) -> str:
+    """Format datetime to ISO 8601"""
+    return dt.strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
+
+
+def get_current_time() -> str:
+    """Get current time in ISO format"""
+    return format_datetime(datetime.now(timezone.utc))
+
+
+def hash_password(password: str) -> str:
+    """Simple password hashing"""
+    return hashlib.sha256(password.encode()).hexdigest()
+
+
+#### DEMO_DATA #########################################################################################################
+
+
+def populate_demo_data(storage: "InMemoryStorage"):
+    """Populate InMemoryStorage with demo data for testing/demo purposes"""
+    current_time = get_current_time()
+    # Create demo users
+    users_data = [
+        {
+            "email": "john.doe@example.com",
+            "username": "johndoe",
+            "password": hash_password("password123"),
+            "bio": "Full-stack developer passionate about clean code and innovative solutions. Love working with modern web technologies.",
+            "image": "https://api.realworld.io/images/smiley-cyrus.jpeg",
+            "createdAt": current_time,
+        },
+        {
+            "email": "jane.smith@example.com",
+            "username": "janesmith",
+            "password": hash_password("password123"),
+            "bio": "Frontend developer with a keen eye for UI/UX design. Specializing in React and modern CSS frameworks.",
+            "image": "https://api.realworld.io/images/smiley-cyrus.jpeg",
+            "createdAt": current_time,
+        },
+        {
+            "email": "mike.wilson@example.com",
+            "username": "mikewilson",
+            "password": hash_password("password123"),
+            "bio": "Backend engineer focused on scalable architecture and DevOps. Enthusiast of cloud technologies and automation.",
+            "image": "https://api.realworld.io/images/smiley-cyrus.jpeg",
+            "createdAt": current_time,
+        },
+        {
+            "email": "sarah.chen@example.com",
+            "username": "sarahchen",
+            "password": hash_password("password123"),
+            "bio": "Data scientist and machine learning engineer. Passionate about turning data into actionable insights.",
+            "image": "https://api.realworld.io/images/smiley-cyrus.jpeg",
+            "createdAt": current_time,
+        }
+    ]
+    # Add users and store their IDs
+    user_ids = []
+    for user_data in users_data:
+        user = storage.users.add(user_data)
+        user_ids.append(user["id"])
+    # Create demo articles
+    articles_data = [
+        {
+            "slug": "how-to-learn-javascript-efficiently",
+            "title": "How to Learn JavaScript Efficiently",
+            "description": "A comprehensive guide to mastering JavaScript from beginner to advanced level",
+            "body": "Learning JavaScript can be overwhelming with so many resources available. Here's a structured approach that has helped thousands of developers master this essential language.\n\n## Start with the Fundamentals\n\nBefore diving into frameworks, master the core concepts: variables, functions, objects, and arrays. Understanding these building blocks is crucial for writing clean, maintainable code.\n\n## Practice with Real Projects\n\nThe best way to learn is by building actual applications. Start with simple projects like a todo list or calculator, then gradually increase complexity.\n\n## Join the Community\n\nEngage with other developers through forums, Discord servers, and local meetups. The JavaScript community is incredibly welcoming and helpful.",
+            "tagList": ["javascript", "programming", "webdev", "beginners"],
+            "author_id": user_ids[0],
+            "createdAt": current_time,
+            "updatedAt": current_time,
+        },
+        {
+            "slug": "react-hooks-best-practices",
+            "title": "React Hooks: Best Practices and Common Pitfalls",
+            "description": "Essential patterns and anti-patterns when working with React Hooks",
+            "body": "React Hooks have revolutionized how we write React components, but they come with their own set of best practices and potential pitfalls.\n\n## useEffect Dependencies\n\nOne of the most common mistakes is forgetting to include dependencies in the useEffect array. This can lead to stale closures and unexpected behavior.\n\n## Custom Hooks for Reusability\n\nCreate custom hooks to encapsulate stateful logic that can be shared across components. This promotes code reuse and maintainability.\n\n## Performance Considerations\n\nUse useMemo and useCallback judiciously. Don't optimize prematurely, but be aware of when these hooks can help prevent unnecessary re-renders.",
+            "tagList": ["react", "hooks", "javascript", "frontend"],
+            "author_id": user_ids[1],
+            "createdAt": current_time,
+            "updatedAt": current_time,
+        },
+        {
+            "slug": "building-scalable-apis-with-node-js",
+            "title": "Building Scalable APIs with Node.js",
+            "description": "Architectural patterns and best practices for creating robust backend services",
+            "body": "Building scalable APIs requires careful consideration of architecture, error handling, and performance optimization.\n\n## API Design Principles\n\nFollow RESTful conventions and use appropriate HTTP status codes. Design your API to be intuitive and self-documenting.\n\n## Error Handling Strategy\n\nImplement comprehensive error handling with proper logging and monitoring. Use middleware to handle errors consistently across your application.\n\n## Database Optimization\n\nOptimize database queries and consider implementing caching strategies for frequently accessed data. Connection pooling is essential for production applications.",
+            "tagList": ["nodejs", "api", "backend", "architecture"],
+            "author_id": user_ids[2],
+            "createdAt": current_time,
+            "updatedAt": current_time,
+        },
+        {
+            "slug": "introduction-to-machine-learning-for-developers",
+            "title": "Introduction to Machine Learning for Developers",
+            "description": "Getting started with ML concepts and practical applications for software developers",
+            "body": "Machine learning might seem intimidating, but it's more accessible than ever for developers looking to expand their skillset.\n\n## Understanding the Basics\n\nStart with supervised learning concepts like classification and regression. These form the foundation for more complex ML algorithms.\n\n## Practical Tools and Libraries\n\nPython's scikit-learn is perfect for beginners, while TensorFlow and PyTorch offer more advanced capabilities for deep learning projects.\n\n## Data Preprocessing\n\nMost of ML work involves cleaning and preparing data. Learn to handle missing values, normalize features, and split datasets properly.",
+            "tagList": ["machinelearning", "python", "ai", "datascience"],
+            "author_id": user_ids[3],
+            "createdAt": current_time,
+            "updatedAt": current_time,
+        }
+    ]
+    # Add articles and store their IDs
+    article_ids = []
+    for article_data in articles_data:
+        article = storage.articles.add(article_data)
+        article_ids.append(article["id"])
+    # Create demo comments
+    comments_data = [
+        {
+            "body": "Great article! I've been struggling with JavaScript concepts and this really helps clarify things.",
+            "article_id": article_ids[0],
+            "author_id": user_ids[1],
+            "createdAt": current_time,
+            "updatedAt": current_time,
+        },
+        {
+            "body": "The project-based approach really works. I built three projects following this guide and learned so much!",
+            "article_id": article_ids[0],
+            "author_id": user_ids[2],
+            "createdAt": current_time,
+            "updatedAt": current_time,
+        },
+        {
+            "body": "useEffect dependencies caught me so many times when I was learning React. Wish I had read this earlier!",
+            "article_id": article_ids[1],
+            "author_id": user_ids[0],
+            "createdAt": current_time,
+            "updatedAt": current_time,
+        },
+        {
+            "body": "Custom hooks are a game-changer. They make components so much cleaner and more reusable.",
+            "article_id": article_ids[1],
+            "author_id": user_ids[3],
+            "createdAt": current_time,
+            "updatedAt": current_time,
+        },
+        {
+            "body": "Error handling is definitely something I need to improve on. Thanks for the practical tips!",
+            "article_id": article_ids[2],
+            "author_id": user_ids[1],
+            "createdAt": current_time,
+            "updatedAt": current_time,
+        },
+        {
+            "body": "Connection pooling made such a difference in my API performance. Great advice!",
+            "article_id": article_ids[2],
+            "author_id": user_ids[0],
+            "createdAt": current_time,
+            "updatedAt": current_time,
+        },
+        {
+            "body": "As someone new to ML, this is exactly the kind of practical introduction I was looking for.",
+            "article_id": article_ids[3],
+            "author_id": user_ids[1],
+            "createdAt": current_time,
+            "updatedAt": current_time,
+        },
+        {
+            "body": "The data preprocessing section is spot on. It's definitely where most of the work happens in ML projects.",
+            "article_id": article_ids[3],
+            "author_id": user_ids[2],
+            "createdAt": current_time,
+            "updatedAt": current_time,
+        }
+    ]
+    # Add comments
+    for comment_data in comments_data:
+        storage.comments.add(comment_data)
+    # Create some follow relationships
+    # John follows Jane and Mike
+    storage.follows.add(user_ids[0], user_ids[1])
+    storage.follows.add(user_ids[0], user_ids[2])
+    # Jane follows Sarah
+    storage.follows.add(user_ids[1], user_ids[3])
+    # Mike follows John and Sarah
+    storage.follows.add(user_ids[2], user_ids[0])
+    storage.follows.add(user_ids[2], user_ids[3])
+    # Create some favorite relationships
+    # John favorites Jane's and Sarah's articles
+    storage.favorites.add(user_ids[0], article_ids[1])
+    storage.favorites.add(user_ids[0], article_ids[3])
+    # Jane favorites Mike's article
+    storage.favorites.add(user_ids[1], article_ids[2])
+    # Mike favorites John's article
+    storage.favorites.add(user_ids[2], article_ids[0])
+    # Sarah favorites John's and Jane's articles
+    storage.favorites.add(user_ids[3], article_ids[0])
+    storage.favorites.add(user_ids[3], article_ids[1])
 
 
 #### IMPLEMENTATION ####################################################################################################
@@ -311,6 +509,8 @@ class InMemoryStorage:
         self.comments = InMemoryModel(max_count=MAX_COMMENTS_PER_SESSION)
         self.follows = InMemoryLinks(max_count=MAX_FOLLOWS_PER_SESSION)  # user_id -> followed user_ids
         self.favorites = InMemoryLinks(max_count=MAX_FAVORITES_PER_SESSION)  # user_id -> favorited article_ids
+        if POPULATE_DEMO_DATA:
+            populate_demo_data(self)
 
 
 class _StorageContainer:
@@ -697,11 +897,6 @@ def generate_slug(title: str) -> str:
     return slug.strip("-")
 
 
-def hash_password(password: str) -> str:
-    """Simple password hashing"""
-    return hashlib.sha256(password.encode()).hexdigest()
-
-
 def generate_token(user_id: str) -> str:
     """Generate JWT-like token (simplified)"""
     payload = f"{user_id}:{int(time.time())}"
@@ -741,16 +936,6 @@ def get_user_by_username(username: str, storage: InMemoryStorage) -> Optional[Di
 def get_article_by_slug(slug: str, storage: InMemoryStorage) -> Optional[Dict]:
     """Find article by slug"""
     return next((article for article in storage.articles.values() if article["slug"] == slug), None)
-
-
-def format_datetime(dt: datetime) -> str:
-    """Format datetime to ISO 8601"""
-    return dt.strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
-
-
-def get_current_time() -> str:
-    """Get current time in ISO format"""
-    return format_datetime(datetime.now(timezone.utc))
 
 
 def create_user_response(user: Dict, include_token: bool = True) -> Dict:
