@@ -24,7 +24,7 @@ jobs:
       
       - name: Build your site
         run: |
-          # Your build commands here
+          cd angular-realworld-example-app
           npm install
           npm run build
       
