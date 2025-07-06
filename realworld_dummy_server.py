@@ -1062,7 +1062,7 @@ class RealWorldHandler(BaseHTTPRequestHandler):
         log_structured(http_logger, logging.INFO,
             "Request started",
             method=method, path=path, ip=client_ip, user_id=current_user_id)
-        # Secure CSRF with origins, populated for anything else than GET
+        # Secure CSRF with origins, populated POST with JSON or PUT/DELETE/PATCH
         if method != "GET" and not self._check_csrf_protection():
             return self._send_error(403, {"errors": {"body": ["Origin header required for CSRF protection"]}})
         # Route to handlers
