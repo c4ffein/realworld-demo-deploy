@@ -26,6 +26,7 @@ jobs:
         with:
           node-version: '20'
           cache: 'yarn'  # enable yarn cache
+          cache-dependency-path: './angular-realworld-example-app/package-lock.json'
 
       - name: Setup Pages
         uses: actions/configure-pages@v4
