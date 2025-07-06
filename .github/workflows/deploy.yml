@@ -20,21 +20,27 @@ jobs:
         uses: actions/checkout@v4
         with:
           submodules: recursive  # needed for angular-realworld-example-app
-      
+
+      - name: Setup Node.js  # not needed but better use a specific node version + enable yarn caching
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'yarn'  # enable yarn cache
+
       - name: Setup Pages
         uses: actions/configure-pages@v4
-      
+
       - name: Build your site
         run: |
           cd angular-realworld-example-app
           yarn install
           npm run build
-      
+
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v3
         with:
           path: './dist'  # or your build output directory
-      
+
       - name: Deploy to GitHub Pages
         id: deployment
         uses: actions/deploy-pages@v4
