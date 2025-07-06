@@ -34,7 +34,7 @@ jobs:
 
       - name: Quick and dirty backend location modification  # no var env for backend configuration
         run: >
-          sed
+          sed -i
           's|https://api\.realworld\.io/api|https://api\.realworld\.build/api|g'
           angular-realworld-example-app/src/app/core/interceptors/api.interceptor.ts
 
