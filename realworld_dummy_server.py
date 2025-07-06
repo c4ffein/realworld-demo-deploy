@@ -1062,14 +1062,13 @@ class RealWorldHandler(BaseHTTPRequestHandler):
         log_structured(http_logger, logging.INFO,
             "Request started",
             method=method, path=path, ip=client_ip, user_id=current_user_id)
+        # Secure CSRF with origins, populated for anything else than GET
+        if method != "GET" and not self._check_csrf_protection():
+            return self._send_error(403, {"errors": {"body": ["Origin header required for CSRF protection"]}})
         # Route to handlers
         if method == "POST" and path == "/users":
-            if not self._check_csrf_protection():
-                return self._send_error(403, {"errors": {"body": ["Origin header required for CSRF protection"]}})
             self._handle_register(storage)
         elif method == "POST" and path == "/users/login":
-            if not self._check_csrf_protection():
-                return self._send_error(403, {"errors": {"body": ["Origin header required for CSRF protection"]}})
             self._handle_login(storage)
         elif method == "GET" and path == "/user":
             self._handle_get_current_user(storage, current_user_id)
