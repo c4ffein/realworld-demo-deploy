@@ -18,6 +18,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          submodules: recursive  # needed for angular-realworld-example-app
       
       - name: Setup Pages
         uses: actions/configure-pages@v4
