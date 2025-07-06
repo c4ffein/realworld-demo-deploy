@@ -27,7 +27,7 @@ jobs:
       - name: Build your site
         run: |
           cd angular-realworld-example-app
-          npm install
+          yarn install
           npm run build
       
       - name: Upload artifact
