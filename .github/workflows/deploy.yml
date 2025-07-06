@@ -37,7 +37,7 @@ jobs:
         run: |
           cd angular-realworld-example-app
           yarn install
-          ng build -prod
+          yarn ng build -prod
 
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v3
