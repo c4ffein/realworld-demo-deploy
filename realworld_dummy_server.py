@@ -37,6 +37,7 @@ https://github.com/c4ffein/realworld-django-ninja/
 - You should set CLIENT_IP_HEADER when running behind a reverse proxy (e.g., "X-Forwarded-For" or "X-Real-IP")
   - This ensures proper client IP detection for rate limiting when behind nginx, Apache, or load balancers
   - Without this setting, all requests will appear to come from the proxy's IP address
+- `POPULATE_DEMO_DATA=True` allows you to copy demo data for each new session, including the default one
 
 ## Development Notes
 - Vibe coded with Claude Code
