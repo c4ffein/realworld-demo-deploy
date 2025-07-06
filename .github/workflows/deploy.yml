@@ -34,13 +34,13 @@ jobs:
       - name: Build your site
         run: |
           cd angular-realworld-example-app
-          yarn install
-          npm run build
+          yarn install --frozen-lockfile
+          ng build -prod
 
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v3
         with:
-          path: './dist'  # or your build output directory
+          path: './angular-realworld-example-app/dist'
 
       - name: Deploy to GitHub Pages
         id: deployment
