@@ -1261,13 +1261,13 @@ class RealWorldHandler(BaseHTTPRequestHandler):
             user_id=current_user_id,
         )
         # Route to handlers
-        if method == "POST" and path == "/users":
+        if method == "POST" and path_parts == ["users"]:
             self._handle_register(storage, target_session_id)
-        elif method == "POST" and path == "/users/login":
+        elif method == "POST" and path_parts == ["users", "login"]:
             self._handle_login(storage, target_session_id)
-        elif method == "GET" and path == "/user":
+        elif method == "GET" and path_parts == ["user"]:
             self._handle_get_current_user(storage, current_user_id)
-        elif method == "PUT" and path == "/user":
+        elif method == "PUT" and path_parts == ["user"]:
             self._handle_update_user(storage, current_user_id)
         elif method == "GET" and path_parts[0] == "profiles" and len(path_parts) == 2:
             self._handle_get_profile(storage, path_parts[1], current_user_id)
@@ -1275,11 +1275,11 @@ class RealWorldHandler(BaseHTTPRequestHandler):
             self._handle_follow_user(storage, path_parts[1], current_user_id)
         elif method == "DELETE" and len(path_parts) == 3 and path_parts[0] == "profiles" and path_parts[2] == "follow":
             self._handle_unfollow_user(storage, path_parts[1], current_user_id)
-        elif method == "GET" and path == "/articles":
+        elif method == "GET" and path_parts == ["articles"]:
             self._handle_list_articles(storage, query_params, current_user_id)
-        elif method == "GET" and path == "/articles/feed":
+        elif method == "GET" and path_parts == ["articles", "feed"]:
             self._handle_articles_feed(storage, query_params, current_user_id)
-        elif method == "POST" and path == "/articles":
+        elif method == "POST" and path_parts == ["articles"]:
             self._handle_create_article(storage, current_user_id)
         elif method == "GET" and len(path_parts) == 2 and path_parts[0] == "articles":
             self._handle_get_article(storage, path_parts[1], current_user_id)
@@ -1301,7 +1301,7 @@ class RealWorldHandler(BaseHTTPRequestHandler):
             method == "DELETE" and len(path_parts) == 4 and path_parts[0] == "articles" and path_parts[2] == "comments"
         ):
             self._handle_delete_comment(storage, path_parts[1], int(path_parts[3]), current_user_id)
-        elif method == "GET" and path == "/tags":
+        elif method == "GET" and path_parts == ["tags"]:
             self._handle_get_tags(storage)
         else:
             self._send_error(404, {"errors": {"body": ["Not found"]}})
