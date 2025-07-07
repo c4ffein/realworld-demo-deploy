@@ -133,7 +133,7 @@ class JSONFormatter(logging.Formatter):
             "logger": record.name,
             "level": record.levelname,
             "category": (lambda v: f"{record.name}.{v}" if v is not None else record.name)(
-                getattr(record, 'category', None)
+                getattr(record, "category", None)
             ),
             "message": record.getMessage(),
             "data": getattr(record, "data", {}),
@@ -149,7 +149,7 @@ def setup_logging():
     # Clear any existing handlers
     logger.handlers.clear()
     # Create formatter
-    formatter = JSONFormatter(datefmt='%Y-%m-%dT%H:%M:%S')
+    formatter = JSONFormatter(datefmt="%Y-%m-%dT%H:%M:%S")
     # Console handler
     console_handler = logging.StreamHandler()
     console_handler.setFormatter(formatter)
@@ -238,7 +238,7 @@ def populate_demo_data(storage: "InMemoryStorage"):
             "bio": "Data scientist and machine learning engineer. Passionate about turning data into actionable insights.",
             "image": "https://api.realworld.io/images/smiley-cyrus.jpeg",
             "createdAt": current_time,
-        }
+        },
     ]
     # Add users and store their IDs
     user_ids = []
@@ -286,7 +286,7 @@ def populate_demo_data(storage: "InMemoryStorage"):
             "author_id": user_ids[3],
             "createdAt": current_time,
             "updatedAt": current_time,
-        }
+        },
     ]
     # Add articles and store their IDs
     article_ids = []
@@ -350,7 +350,7 @@ def populate_demo_data(storage: "InMemoryStorage"):
             "author_id": user_ids[2],
             "createdAt": current_time,
             "updatedAt": current_time,
-        }
+        },
     ]
     # Add comments
     for comment_data in comments_data:
@@ -395,6 +395,7 @@ class InMemoryModel:
     when rolling with new ids, we may safe-delete so we don't break any link in the storage (maybe through a callback)
     won't implement for now as the ROI isn't really there
     """
+
     def __init__(self, max_count):
         self.max_count: int = max_count
         self.objects: Dict[str, object] = {}
@@ -411,27 +412,40 @@ class InMemoryModel:
         self.current_id_counter += 1
         if len(self.objects) > self.max_count:
             evicted_id = self.last_accessed_ids[0]
-            log_structured(security_logger, logging.WARNING,
+            log_structured(
+                security_logger,
+                logging.WARNING,
                 "Rate limit reached - Object storage full, evicting oldest object",
-                rate_limit_type="object_storage", max_count=self.max_count,
-                evicted_id=evicted_id, new_id=obj["id"])
+                rate_limit_type="object_storage",
+                max_count=self.max_count,
+                evicted_id=evicted_id,
+                new_id=obj["id"],
+            )
             del self.objects[evicted_id]
             self.last_accessed_ids = self.last_accessed_ids[1:] + [obj["id"]]
         else:
             self.last_accessed_ids.append(obj["id"])
-        log_structured(storage_logger, logging.DEBUG, "object added",
-            operation="add", object_id=obj['id'], total_objects=len(self.objects))
+        log_structured(
+            storage_logger,
+            logging.DEBUG,
+            "object added",
+            operation="add",
+            object_id=obj["id"],
+            total_objects=len(self.objects),
+        )
         return obj
 
     def get(self, _id):
         _id = normalize_id(_id)
         if _id not in self.objects:
-            log_structured(storage_logger, logging.DEBUG, "get - object not found",
-                operation="get", object_id=_id, found=False)
+            log_structured(
+                storage_logger, logging.DEBUG, "get - object not found", operation="get", object_id=_id, found=False
+            )
             return None
         self.last_accessed_ids = [*(e for e in self.last_accessed_ids if e != _id), _id]
-        log_structured(storage_logger, logging.DEBUG, "get - object retrieved",
-            operation="get", object_id=_id, found=True)
+        log_structured(
+            storage_logger, logging.DEBUG, "get - object retrieved", operation="get", object_id=_id, found=True
+        )
         return self.objects[_id]
 
     def keys(self):
@@ -448,11 +462,23 @@ class InMemoryModel:
         if _id in self.objects:
             del self.objects[_id]
             self.last_accessed_ids = [cid for cid in self.last_accessed_ids if cid != _id]
-            log_structured(storage_logger, logging.DEBUG, "delete - object deleted",
-                operation="delete", object_id=_id, success=True)
+            log_structured(
+                storage_logger,
+                logging.DEBUG,
+                "delete - object deleted",
+                operation="delete",
+                object_id=_id,
+                success=True,
+            )
             return True
-        log_structured(storage_logger, logging.DEBUG, "delete - object not deleted",
-            operation="delete", object_id=_id, success=False)
+        log_structured(
+            storage_logger,
+            logging.DEBUG,
+            "delete - object not deleted",
+            operation="delete",
+            object_id=_id,
+            success=False,
+        )
         return False
 
 
@@ -467,13 +493,18 @@ class InMemoryLinks:
             return
         _index = self.links.index((source, target)) if (source, target) in self.links else None
         if _index is not None:
-            self.links = [*self.links[:_index], *self.links[_index+1:], (source, target)]
+            self.links = [*self.links[:_index], *self.links[_index + 1 :], (source, target)]
         elif len(self.links) >= self.max_count:
             evicted_link = self.links[0] if self.links else None
-            log_structured(security_logger, logging.WARNING,
+            log_structured(
+                security_logger,
+                logging.WARNING,
                 "Rate limit reached - Link storage full, evicting oldest link",
-                rate_limit_type="link_storage", max_count=self.max_count,
-                evicted_link=evicted_link, new_link=(source, target))
+                rate_limit_type="link_storage",
+                max_count=self.max_count,
+                evicted_link=evicted_link,
+                new_link=(source, target),
+            )
             self.links = [*self.links[1:], (source, target)]
         else:
             self.links = [*self.links, (source, target)]
@@ -482,7 +513,7 @@ class InMemoryLinks:
         source, target = normalize_id(source), normalize_id(target)
         _index = self.links.index((source, target)) if (source, target) in self.links else None
         if _index is not None:
-            self.links = [*self.links[:_index], *self.links[_index+1:]]
+            self.links = [*self.links[:_index], *self.links[_index + 1 :]]
 
     def is_linked(self, source, target):
         source, target = normalize_id(source), normalize_id(target)
@@ -593,9 +624,9 @@ class _StorageContainer:
             smallest = index
             left_child = 2 * index + 1
             right_child = 2 * index + 2
-            if (left_child < len(self.heap) and self.heap[left_child][0] < self.heap[smallest][0]):
+            if left_child < len(self.heap) and self.heap[left_child][0] < self.heap[smallest][0]:
                 smallest = left_child
-            if (right_child < len(self.heap) and self.heap[right_child][0] < self.heap[smallest][0]):
+            if right_child < len(self.heap) and self.heap[right_child][0] < self.heap[smallest][0]:
                 smallest = right_child
             if smallest == index:
                 break
@@ -614,16 +645,21 @@ class _StorageContainer:
         """Normalize IP for session limiting - IPv4 as-is, IPv6 to /64 range"""
         if ip.endswith("/64"):  # makes it safe to call multiple times
             return ip
-        if ':' in ip:  # IPv6, limit per /64 subnet (first 4 groups)
-            parts = ip.split(':')
-            return ':'.join(parts[:4]) + '::/64' if len(parts) >= 4 else ip + "/64"  # unsafe but shouldn't happen
+        if ":" in ip:  # IPv6, limit per /64 subnet (first 4 groups)
+            parts = ip.split(":")
+            return ":".join(parts[:4]) + "::/64" if len(parts) >= 4 else ip + "/64"  # unsafe but shouldn't happen
         return ip  # IPv4 as-is
 
     def _handle_client_ip_and_session_eviction(self, identifier, client_ip):
         """Helper that cleanly removes a session from ip_to_sessions: removes the ip entirely if it becomes empty"""
         if not client_ip:
-            log_structured(session_management_logger, logging.DEBUG, "Client IP and session eviction skipped",
-                          identifier=identifier, client_ip=None)
+            log_structured(
+                session_management_logger,
+                logging.DEBUG,
+                "Client IP and session eviction skipped",
+                identifier=identifier,
+                client_ip=None,
+            )
             return
         normalized_ip = self._normalize_ip_for_limiting(client_ip)
         if normalized_ip in self.ip_to_sessions:
@@ -631,33 +667,57 @@ class _StorageContainer:
             self.ip_to_sessions[normalized_ip] = [e for e in self.ip_to_sessions[normalized_ip] if e != identifier]
             if not self.ip_to_sessions[normalized_ip]:  # Remove empty lists
                 del self.ip_to_sessions[normalized_ip]
-                log_structured(session_management_logger, logging.DEBUG,
+                log_structured(
+                    session_management_logger,
+                    logging.DEBUG,
                     "Client IP and session eviction completed - IP entry removed",
-                    identifier=identifier, client_ip=client_ip, normalized_ip=normalized_ip,
-                    sessions_before=sessions_before)
+                    identifier=identifier,
+                    client_ip=client_ip,
+                    normalized_ip=normalized_ip,
+                    sessions_before=sessions_before,
+                )
             else:
-                log_structured(session_management_logger, logging.DEBUG,
+                log_structured(
+                    session_management_logger,
+                    logging.DEBUG,
                     "Client IP and session eviction completed - session removed",
-                    identifier=identifier, client_ip=client_ip,
-                    normalized_ip=normalized_ip, sessions_before=sessions_before,
-                    sessions_after=len(self.ip_to_sessions[normalized_ip]))
+                    identifier=identifier,
+                    client_ip=client_ip,
+                    normalized_ip=normalized_ip,
+                    sessions_before=sessions_before,
+                    sessions_after=len(self.ip_to_sessions[normalized_ip]),
+                )
         else:
-            log_structured(session_management_logger, logging.DEBUG, "Client IP and session eviction - IP not found",
-                identifier=identifier, client_ip=client_ip,
-                normalized_ip=normalized_ip)
+            log_structured(
+                session_management_logger,
+                logging.DEBUG,
+                "Client IP and session eviction - IP not found",
+                identifier=identifier,
+                client_ip=client_ip,
+                normalized_ip=normalized_ip,
+            )
 
     def _handle_client_ip_and_session_addition(self, identifier, client_ip):
         """Helper that adds a session to ip_to_sessions: may remove a session as a side_effect"""
         if not client_ip:
-            log_structured(session_management_logger, logging.DEBUG,
-                "Client IP and session addition skipped - no client IP", identifier=identifier)
+            log_structured(
+                session_management_logger,
+                logging.DEBUG,
+                "Client IP and session addition skipped - no client IP",
+                identifier=identifier,
+            )
             return
         normalized_ip = self._normalize_ip_for_limiting(client_ip)
         if normalized_ip not in self.ip_to_sessions:
             self.ip_to_sessions[normalized_ip] = [identifier]
-            log_structured(session_management_logger, logging.DEBUG,
+            log_structured(
+                session_management_logger,
+                logging.DEBUG,
                 "Client IP and session addition completed - new IP entry",
-                identifier=identifier, client_ip=client_ip, normalized_ip=normalized_ip)
+                identifier=identifier,
+                client_ip=client_ip,
+                normalized_ip=normalized_ip,
+            )
             return
         sessions_before = len(self.ip_to_sessions[normalized_ip])
         self.ip_to_sessions[normalized_ip].append(identifier)
@@ -668,10 +728,17 @@ class _StorageContainer:
             self._pop()
             self.ip_to_sessions[normalized_ip] = self.ip_to_sessions[normalized_ip][1:]
             sessions_removed += 1
-        log_structured(session_management_logger, logging.DEBUG, "Client IP and session addition completed",
-            identifier=identifier, client_ip=client_ip,
-            normalized_ip=normalized_ip, sessions_before=sessions_before,
-            sessions_after=len(self.ip_to_sessions[normalized_ip]), sessions_removed=sessions_removed)
+        log_structured(
+            session_management_logger,
+            logging.DEBUG,
+            "Client IP and session addition completed",
+            identifier=identifier,
+            client_ip=client_ip,
+            normalized_ip=normalized_ip,
+            sessions_before=sessions_before,
+            sessions_after=len(self.ip_to_sessions[normalized_ip]),
+            sessions_removed=sessions_removed,
+        )
 
     def _handle_client_ip_and_session_priority(self, session_id, client_ip):
         """
@@ -679,37 +746,64 @@ class _StorageContainer:
         May actually pop the oldest session for an ip if we reattribute a session from an ip to another
         """
         if not client_ip:
-            log_structured(session_management_logger, logging.DEBUG,
-                "Client IP and session priority skipped - no client IP", session_id=session_id)
+            log_structured(
+                session_management_logger,
+                logging.DEBUG,
+                "Client IP and session priority skipped - no client IP",
+                session_id=session_id,
+            )
             return
         normalized_ip = self._normalize_ip_for_limiting(client_ip)
         _, _, _, _, saved_client_ip = self.heap[self.index_map[session_id]]
         if saved_client_ip == normalized_ip:
             if normalized_ip not in self.ip_to_sessions:  # shouldn't happen but safer to handle it anyway
                 self.ip_to_sessions[normalized_ip] = [session_id]
-                log_structured(session_management_logger, logging.DEBUG,
+                log_structured(
+                    session_management_logger,
+                    logging.DEBUG,
                     "Client IP and session priority - created missing IP entry",
-                    session_id=session_id, client_ip=client_ip, normalized_ip=normalized_ip)
+                    session_id=session_id,
+                    client_ip=client_ip,
+                    normalized_ip=normalized_ip,
+                )
                 return
             sessions_before = len(self.ip_to_sessions[normalized_ip])
             self.ip_to_sessions[normalized_ip] = [
-                e for e in self.ip_to_sessions[normalized_ip] if e != session_id  # still safe if not present
+                e
+                for e in self.ip_to_sessions[normalized_ip]
+                if e != session_id  # still safe if not present
             ] + [session_id]  # we should never exceed MAX_SESSIONS_PER_IP as this session is supposed to be here though
-            log_structured(session_management_logger, logging.DEBUG,
+            log_structured(
+                session_management_logger,
+                logging.DEBUG,
                 "Client IP and session priority - session moved to end",
-                session_id=session_id, client_ip=client_ip,
-                normalized_ip=normalized_ip, sessions_count=sessions_before)
+                session_id=session_id,
+                client_ip=client_ip,
+                normalized_ip=normalized_ip,
+                sessions_count=sessions_before,
+            )
             return
-        log_structured(session_management_logger, logging.DEBUG,
+        log_structured(
+            session_management_logger,
+            logging.DEBUG,
             "Client IP and session priority - triggering reattribution",
-              session_id=session_id, client_ip=client_ip,
-              normalized_ip=normalized_ip, saved_client_ip=saved_client_ip)
+            session_id=session_id,
+            client_ip=client_ip,
+            normalized_ip=normalized_ip,
+            saved_client_ip=saved_client_ip,
+        )
         self._handle_client_ip_and_session_reattribution(session_id, saved_client_ip, normalized_ip)
 
     def _handle_client_ip_and_session_reattribution(self, session_id, normalized_saved_ip, normalized_client_ip):
         """expects normalized_client_ip and normalized_saved_ip to both be defined, and different"""
-        log_structured(session_management_logger, logging.DEBUG, "Client IP and session reattribution started",
-              session_id=session_id, normalized_saved_ip=normalized_saved_ip, normalized_client_ip=normalized_client_ip)
+        log_structured(
+            session_management_logger,
+            logging.DEBUG,
+            "Client IP and session reattribution started",
+            session_id=session_id,
+            normalized_saved_ip=normalized_saved_ip,
+            normalized_client_ip=normalized_client_ip,
+        )
         self.heap[self.index_map[session_id]][4] = normalized_client_ip  # update the client_ip in the data struct
         saved_ip_removed = False
         if normalized_saved_ip and normalized_saved_ip in self.ip_to_sessions:
@@ -722,7 +816,9 @@ class _StorageContainer:
                 saved_ip_removed = True
         client_ip_sessions_before = len(self.ip_to_sessions.get(normalized_client_ip, []))
         self.ip_to_sessions[normalized_client_ip] = [
-            e for e in self.ip_to_sessions.get(normalized_client_ip, []) if e != session_id  # still safe if not present
+            e
+            for e in self.ip_to_sessions.get(normalized_client_ip, [])
+            if e != session_id  # still safe if not present
         ] + [session_id]
         sessions_removed = 0
         while len(self.ip_to_sessions[normalized_client_ip]) > MAX_SESSIONS_PER_IP:
@@ -730,11 +826,18 @@ class _StorageContainer:
             self._pop()
             self.ip_to_sessions[normalized_client_ip] = self.ip_to_sessions[normalized_client_ip][1:]
             sessions_removed += 1
-        log_structured(session_management_logger, logging.DEBUG, "Client IP and session reattribution completed",
-            session_id=session_id, normalized_saved_ip=normalized_saved_ip, normalized_client_ip=normalized_client_ip,
-            saved_ip_removed=saved_ip_removed, client_ip_sessions_before=client_ip_sessions_before,
+        log_structured(
+            session_management_logger,
+            logging.DEBUG,
+            "Client IP and session reattribution completed",
+            session_id=session_id,
+            normalized_saved_ip=normalized_saved_ip,
+            normalized_client_ip=normalized_client_ip,
+            saved_ip_removed=saved_ip_removed,
+            client_ip_sessions_before=client_ip_sessions_before,
             client_ip_sessions_after=len(self.ip_to_sessions[normalized_client_ip]),
-            sessions_removed=sessions_removed)
+            sessions_removed=sessions_removed,
+        )
 
     # only external method that should get called
 
@@ -777,24 +880,32 @@ class _StorageContainer:
             if len(self.index_map) >= self.MAX_SESSIONS:
                 evicted_session = self.pop()
                 if evicted_session:
-                    log_structured(security_logger, logging.INFO,
+                    log_structured(
+                        security_logger,
+                        logging.INFO,
                         "Rate limit reached - Session storage full, evicting session",
                         rate_limit_type="session_storage",
                         max_sessions=self.MAX_SESSIONS,
                         evicted_session_id=evicted_session[1],
-                        new_session_id=target_session_id
+                        new_session_id=target_session_id,
                     )
             self.push(time_ns(), target_session_id, data=InMemoryStorage(), client_ip=client_ip)
-            log_structured(security_logger, logging.INFO, "New session created",
+            log_structured(
+                security_logger,
+                logging.INFO,
+                "New session created",
                 session_event="created",
                 session_id=target_session_id,
                 total_sessions=len(self.index_map),
-                client_ip=client_ip
+                client_ip=client_ip,
             )
             return target_session_id, self.heap[self.index_map.get(target_session_id)][2]
         r = self.heap[storage_container_index][2]  # existing session
         self.update_priority(target_session_id, time_ns(), client_ip=client_ip)  # manage priority and ip/session
-        log_structured(storage_logger, logging.DEBUG, "Session accessed",
+        log_structured(
+            storage_logger,
+            logging.DEBUG,
+            "Session accessed",
             session_event="accessed",
             session_id_from_cookie=session_id_from_cookie,
             target_session_id=target_session_id,
@@ -824,14 +935,17 @@ storage_container = _StorageContainer()
 def save_data():
     """Save storage_container data to JSON file - WARNING the current implementation wipes all session to ip data"""
     if not DATA_FILE_PATH:
-        log_structured(storage_logger, logging.DEBUG,
+        log_structured(
+            storage_logger,
+            logging.DEBUG,
             "Data persistence skipped - DATA_FILE_PATH not configured",
-            data_file_path=None)
+            data_file_path=None,
+        )
         return False
 
-    log_structured(storage_logger, logging.INFO,
-        "Starting data save",
-        data_file_path=str(DATA_FILE_PATH), operation="save_start")
+    log_structured(
+        storage_logger, logging.INFO, "Starting data save", data_file_path=str(DATA_FILE_PATH), operation="save_start"
+    )
 
     data = {}
     session_count = 0
@@ -844,23 +958,23 @@ def save_data():
             saved_items.append((priority, session_id, storage, client_ip))
             session_count += 1
             session_data = {
-                'users': {
-                    'objects': dict(storage.users.objects),
-                    'last_accessed_ids': storage.users.last_accessed_ids,
-                    'current_id_counter': storage.users.current_id_counter
+                "users": {
+                    "objects": dict(storage.users.objects),
+                    "last_accessed_ids": storage.users.last_accessed_ids,
+                    "current_id_counter": storage.users.current_id_counter,
                 },
-                'articles': {
-                    'objects': dict(storage.articles.objects),
-                    'last_accessed_ids': storage.articles.last_accessed_ids,
-                    'current_id_counter': storage.articles.current_id_counter
+                "articles": {
+                    "objects": dict(storage.articles.objects),
+                    "last_accessed_ids": storage.articles.last_accessed_ids,
+                    "current_id_counter": storage.articles.current_id_counter,
                 },
-                'comments': {
-                    'objects': dict(storage.comments.objects),
-                    'last_accessed_ids': storage.comments.last_accessed_ids,
-                    'current_id_counter': storage.comments.current_id_counter
+                "comments": {
+                    "objects": dict(storage.comments.objects),
+                    "last_accessed_ids": storage.comments.last_accessed_ids,
+                    "current_id_counter": storage.comments.current_id_counter,
                 },
-                'follows': storage.follows.links,
-                'favorites': storage.favorites.links
+                "follows": storage.follows.links,
+                "favorites": storage.favorites.links,
             }
             data[session_id] = session_data
     for priority, session_id, storage, client_ip in saved_items:
@@ -868,28 +982,41 @@ def save_data():
     try:
         with DATA_FILE_PATH.open("w") as f:
             json.dump(data, f, indent=2)
-        log_structured(storage_logger, logging.INFO,
+        log_structured(
+            storage_logger,
+            logging.INFO,
             "Data saved successfully",
-            data_file_path=str(DATA_FILE_PATH), session_count=session_count, operation="save_success")
+            data_file_path=str(DATA_FILE_PATH),
+            session_count=session_count,
+            operation="save_success",
+        )
         return True
     except Exception as e:
-        log_structured(storage_logger, logging.ERROR,
+        log_structured(
+            storage_logger,
+            logging.ERROR,
             "Error saving data",
-            data_file_path=str(DATA_FILE_PATH), error=str(e), operation="save_error")
+            data_file_path=str(DATA_FILE_PATH),
+            error=str(e),
+            operation="save_error",
+        )
     return False
 
 
 def load_data():
     """Load storage_container data from JSON file"""
     if not DATA_FILE_PATH:
-        log_structured(storage_logger, logging.DEBUG,
+        log_structured(
+            storage_logger,
+            logging.DEBUG,
             "Data persistence skipped - DATA_FILE_PATH not configured",
-            data_file_path=None)
+            data_file_path=None,
+        )
         return
 
-    log_structured(storage_logger, logging.INFO,
-        "Starting data load",
-        data_file_path=str(DATA_FILE_PATH), operation="load_start")
+    log_structured(
+        storage_logger, logging.INFO, "Starting data load", data_file_path=str(DATA_FILE_PATH), operation="load_start"
+    )
 
     try:
         with DATA_FILE_PATH.open("r") as f:
@@ -898,34 +1025,48 @@ def load_data():
         for session_id, session_data in data.items():
             storage = InMemoryStorage()
             session_count += 1
-            if 'users' in session_data:
-                storage.users.objects.update(session_data['users'].get('objects', {}))
-                storage.users.last_accessed_ids = session_data['users'].get('last_accessed_ids', [])
-                storage.users.current_id_counter = session_data['users'].get('current_id_counter', 1)
-            if 'articles' in session_data:
-                storage.articles.objects.update(session_data['articles'].get('objects', {}))
-                storage.articles.last_accessed_ids = session_data['articles'].get('last_accessed_ids', [])
-                storage.articles.current_id_counter = session_data['articles'].get('current_id_counter', 1)
-            if 'comments' in session_data:
-                storage.comments.objects.update(session_data['comments'].get('objects', {}))
-                storage.comments.last_accessed_ids = session_data['comments'].get('last_accessed_ids', [])
-                storage.comments.current_id_counter = session_data['comments'].get('current_id_counter', 1)
-            storage.follows.links = session_data.get('follows', [])
-            storage.favorites.links = session_data.get('favorites', [])
+            if "users" in session_data:
+                storage.users.objects.update(session_data["users"].get("objects", {}))
+                storage.users.last_accessed_ids = session_data["users"].get("last_accessed_ids", [])
+                storage.users.current_id_counter = session_data["users"].get("current_id_counter", 1)
+            if "articles" in session_data:
+                storage.articles.objects.update(session_data["articles"].get("objects", {}))
+                storage.articles.last_accessed_ids = session_data["articles"].get("last_accessed_ids", [])
+                storage.articles.current_id_counter = session_data["articles"].get("current_id_counter", 1)
+            if "comments" in session_data:
+                storage.comments.objects.update(session_data["comments"].get("objects", {}))
+                storage.comments.last_accessed_ids = session_data["comments"].get("last_accessed_ids", [])
+                storage.comments.current_id_counter = session_data["comments"].get("current_id_counter", 1)
+            storage.follows.links = session_data.get("follows", [])
+            storage.favorites.links = session_data.get("favorites", [])
             storage_container._push(time_ns(), session_id, storage)
         DATA_FILE_PATH.unlink()  # ensures we won't reload past data
-        log_structured(storage_logger, logging.INFO,
+        log_structured(
+            storage_logger,
+            logging.INFO,
             "Data loaded successfully",
-            data_file_path=str(DATA_FILE_PATH), session_count=session_count, operation="load_success")
+            data_file_path=str(DATA_FILE_PATH),
+            session_count=session_count,
+            operation="load_success",
+        )
     except FileNotFoundError:
-        log_structured(storage_logger, logging.INFO,
+        log_structured(
+            storage_logger,
+            logging.INFO,
             "No data file found - starting with empty storage",
-            data_file_path=str(DATA_FILE_PATH), operation="load_no_file")
+            data_file_path=str(DATA_FILE_PATH),
+            operation="load_no_file",
+        )
         pass
     except Exception as e:
-        log_structured(storage_logger, logging.ERROR,
+        log_structured(
+            storage_logger,
+            logging.ERROR,
             "Error loading data",
-            data_file_path=str(DATA_FILE_PATH), error=str(e), operation="load_error")
+            data_file_path=str(DATA_FILE_PATH),
+            error=str(e),
+            operation="load_error",
+        )
 
 
 def generate_slug(title: str) -> str:
@@ -945,18 +1086,28 @@ def verify_token(token: str, storage: InMemoryStorage, client_ip: str = None) ->
     """Verify token and return user_id if valid"""
     if not token or not token.startswith("token_"):
         if token:  # Only log if token was provided but invalid
-            log_structured(security_logger, logging.WARNING,
+            log_structured(
+                security_logger,
+                logging.WARNING,
                 "Invalid token format",
-                ip=client_ip, token_invalid=True, token_prefix=token[:10] if token else 'None')
+                ip=client_ip,
+                token_invalid=True,
+                token_prefix=token[:10] if token else "None",
+            )
         return None
 
     # in a real implementation, you'd decode the JWT => for simplicity, we'll store token->user_id mapping
     user_id = next((user_id for user_id, user in storage.users.items() if user.get("token") == token), None)
 
     if user_id is None:
-        log_structured(security_logger, logging.WARNING,
+        log_structured(
+            security_logger,
+            logging.WARNING,
             "Token verification failed",
-            ip=client_ip, token_not_found=True, token_prefix=token[:10])
+            ip=client_ip,
+            token_not_found=True,
+            token_prefix=token[:10],
+        )
 
     return user_id
 
@@ -1075,7 +1226,7 @@ class RealWorldHandler(BaseHTTPRequestHandler):
         if CLIENT_IP_HEADER:  # use configured header for client IP (useful when behind reverse proxy)
             header_value = self.headers.get(CLIENT_IP_HEADER)
             if header_value:
-                return header_value.split(',')[0].strip()  # comma-separated IPs (X-Forwarded-For format) - use first
+                return header_value.split(",")[0].strip()  # comma-separated IPs (X-Forwarded-For format) - use first
         return self.request.getpeername()[0]  # fall back to socket connection IP
 
     def _handle_request(self, method: str):
@@ -1099,9 +1250,15 @@ class RealWorldHandler(BaseHTTPRequestHandler):
         # Get authorization header
         current_user_id = verify_token(token, storage, client_ip) if token else None
         # Log request start
-        log_structured(http_logger, logging.INFO,
+        log_structured(
+            http_logger,
+            logging.INFO,
             "Request started",
-            method=method, path=path, ip=client_ip, user_id=current_user_id)
+            method=method,
+            path=path,
+            ip=client_ip,
+            user_id=current_user_id,
+        )
         # Route to handlers
         if method == "POST" and path == "/users":
             self._handle_register(storage, target_session_id)
@@ -1152,9 +1309,9 @@ class RealWorldHandler(BaseHTTPRequestHandler):
         """Parse JSON request body"""
         content_length = int(self.headers.get("Content-Length", 0))
         if content_length == 0:
-            log_structured(http_logger, logging.DEBUG,
-                "Request body: empty (no content-length)",
-                payload_size=0, has_body=False)
+            log_structured(
+                http_logger, logging.DEBUG, "Request body: empty (no content-length)", payload_size=0, has_body=False
+            )
             return {}
         body = self.rfile.read(content_length).decode("utf-8")
         parsed_body = json.loads(body) if body else {}
@@ -1180,8 +1337,15 @@ class RealWorldHandler(BaseHTTPRequestHandler):
                 return cookie.split("=", 1)[1]
         return None
 
-    def _send_response(self, status_code: int, data: Dict, demo_session_id: Optional[str] = None,
-                       start_time: int = None, method: str = None, path: str = None):
+    def _send_response(
+        self,
+        status_code: int,
+        data: Dict,
+        demo_session_id: Optional[str] = None,
+        start_time: int = None,
+        method: str = None,
+        path: str = None,
+    ):
         """Send JSON response"""
         self.send_response(status_code)
         self.send_header("Content-Type", "application/json")
@@ -1199,24 +1363,33 @@ class RealWorldHandler(BaseHTTPRequestHandler):
             duration_ms = (time_ns() - start_time) / 1_000_000  # Convert to milliseconds
             client_ip = self._get_client_ip()
             response_size = len(response_body.encode("utf-8"))
-            log_structured(http_logger, logging.INFO,
+            log_structured(
+                http_logger,
+                logging.INFO,
                 "Request completed",
-                method=method, path=path, status_code=status_code,
-                duration_ms=duration_ms, response_size=response_size, ip=client_ip)
+                method=method,
+                path=path,
+                status_code=status_code,
+                duration_ms=duration_ms,
+                response_size=response_size,
+                ip=client_ip,
+            )
 
-    def _send_error(self, status_code: int, error_data: Dict, start_time: int = None, method: str = None, path: str = None):
+    def _send_error(
+        self, status_code: int, error_data: Dict, start_time: int = None, method: str = None, path: str = None
+    ):
         """Send error response"""
         # Use stored request timing if available
-        start_time = start_time or getattr(self, '_request_start_time', None)
-        method = method or getattr(self, '_request_method', None)
-        path = path or getattr(self, '_request_path', None)
+        start_time = start_time or getattr(self, "_request_start_time", None)
+        method = method or getattr(self, "_request_method", None)
+        path = path or getattr(self, "_request_path", None)
         self._send_response(status_code, error_data, None, start_time, method, path)
 
     def _send_response_with_timing(self, status_code: int, data: Dict, demo_session_id: Optional[uuid.UUID] = None):
         """Send response with automatic timing from stored request data"""
-        start_time = getattr(self, '_request_start_time', None)
-        method = getattr(self, '_request_method', None)
-        path = getattr(self, '_request_path', None)
+        start_time = getattr(self, "_request_start_time", None)
+        method = getattr(self, "_request_method", None)
+        path = getattr(self, "_request_path", None)
         self._send_response(status_code, data, demo_session_id, start_time, method, path)
 
     def _check_csrf_protection(self) -> bool:
@@ -1224,28 +1397,39 @@ class RealWorldHandler(BaseHTTPRequestHandler):
         origin = self.headers.get("Origin")
         client_ip = self._get_client_ip()
         if self._request_method == "GET":
-            log_structured(security_logger, logging.DEBUG, "no CSRF protection for GET",
-                ip=client_ip, origin=origin, bypass=True)
+            log_structured(
+                security_logger, logging.DEBUG, "no CSRF protection for GET", ip=client_ip, origin=origin, bypass=True
+            )
             return True
         if BYPASS_ORIGIN_CHECK:
-            log_structured(security_logger, logging.DEBUG, "CSRF protection bypassed",
-                ip=client_ip, origin=origin, bypass=True)
+            log_structured(
+                security_logger, logging.DEBUG, "CSRF protection bypassed", ip=client_ip, origin=origin, bypass=True
+            )
             return True
         if origin in ALLOWED_ORIGINS:
-            log_structured(security_logger, logging.DEBUG, "CSRF protection passed",
-                ip=client_ip, origin=origin)
+            log_structured(security_logger, logging.DEBUG, "CSRF protection passed", ip=client_ip, origin=origin)
             return True
-        log_structured(security_logger, logging.WARNING, "CSRF protection failed",
-            ip=client_ip, origin=origin, allowed_origins=ALLOWED_ORIGINS)
+        log_structured(
+            security_logger,
+            logging.WARNING,
+            "CSRF protection failed",
+            ip=client_ip,
+            origin=origin,
+            allowed_origins=ALLOWED_ORIGINS,
+        )
         return False
 
     def _require_auth(self, current_user_id: Optional[int]) -> int:
         """Require authentication, return user_id or raise error"""
         if current_user_id is None:
             client_ip = self._get_client_ip()
-            log_structured(security_logger, logging.WARNING,
+            log_structured(
+                security_logger,
+                logging.WARNING,
                 "Authentication required but not provided",
-                ip=client_ip, auth_required=True)
+                ip=client_ip,
+                auth_required=True,
+            )
             self._send_error(401, {"errors": {"body": ["Unauthorized"]}})
             raise Exception("Unauthorized")
         return current_user_id
@@ -1263,8 +1447,14 @@ class RealWorldHandler(BaseHTTPRequestHandler):
         client_ip = self._get_client_ip()
 
         if not all([email, username, password]):
-            log_structured(auth_logger, logging.WARNING, "Registration failed: missing fields",
-                ip=client_ip, email=email, username=username)
+            log_structured(
+                auth_logger,
+                logging.WARNING,
+                "Registration failed: missing fields",
+                ip=client_ip,
+                email=email,
+                username=username,
+            )
             self._send_error(422, {"errors": {"body": ["Email, username and password are required"]}})
             return
 
@@ -1272,15 +1462,27 @@ class RealWorldHandler(BaseHTTPRequestHandler):
         if not all(type[d] == str for d in (email, username, password)) and not all(len(d) <= l for d, l in max_lens):
             err_str = "Email, username and password are expected as strings of length less than "
             err_str += f"{MAX_LEN_USER_EMAIL}, {MAX_LEN_USER_USERNAME}, and {MAX_LEN_USER_PASSWORD}, respectively"
-            log_structured(auth_logger, logging.WARNING, "Registration failed: invalid field lengths",
-                ip=client_ip, email=email, username=username)
+            log_structured(
+                auth_logger,
+                logging.WARNING,
+                "Registration failed: invalid field lengths",
+                ip=client_ip,
+                email=email,
+                username=username,
+            )
             self._send_error(422, {"errors": {"body": [err_str]}})
             return
 
         # Check if user already exists
         if get_user_by_email(email, storage) or get_user_by_username(username, storage):
-            log_structured(auth_logger, logging.WARNING, "Registration failed: user already exists",
-                ip=client_ip, email=email, username=username)
+            log_structured(
+                auth_logger,
+                logging.WARNING,
+                "Registration failed: user already exists",
+                ip=client_ip,
+                email=email,
+                username=username,
+            )
             self._send_error(409, {"errors": {"body": ["User already exists"]}})
             return
 
@@ -1300,9 +1502,15 @@ class RealWorldHandler(BaseHTTPRequestHandler):
         token = generate_token(user_id)
         storage_container.bind_jwt_to_session_id(token, demo_session_id)
         user["token"] = token
-        log_structured(auth_logger, logging.INFO,
+        log_structured(
+            auth_logger,
+            logging.INFO,
             "User registered successfully",
-            ip=client_ip, email=email, username=username, user_id=user_id)
+            ip=client_ip,
+            email=email,
+            username=username,
+            user_id=user_id,
+        )
 
         self._send_response_with_timing(201, {"user": create_user_response(user)}, demo_session_id)
 
@@ -1316,25 +1524,27 @@ class RealWorldHandler(BaseHTTPRequestHandler):
         client_ip = self._get_client_ip()
 
         if not all([email, password]):
-            log_structured(auth_logger, logging.WARNING,
-                "Login failed: missing fields",
-                ip=client_ip, email=email)
+            log_structured(auth_logger, logging.WARNING, "Login failed: missing fields", ip=client_ip, email=email)
             self._send_error(422, {"errors": {"body": ["Email and password are required"]}})
             return
 
         user = get_user_by_email(email, storage)
         if not user or user["password"] != hash_password(password):
-            log_structured(auth_logger, logging.WARNING,
-                "Login failed: invalid credentials",
-                ip=client_ip, email=email)
+            log_structured(auth_logger, logging.WARNING, "Login failed: invalid credentials", ip=client_ip, email=email)
             self._send_error(401, {"errors": {"body": ["Invalid credentials"]}})
             return
 
         user["token"] = generate_token(user["id"])  # Generate new token
         storage_container.bind_jwt_to_session_id(user["token"], demo_session_id)
-        log_structured(auth_logger, logging.INFO,
+        log_structured(
+            auth_logger,
+            logging.INFO,
             "User logged in successfully",
-            ip=client_ip, email=email, username=user.get('username'), user_id=user['id'])
+            ip=client_ip,
+            email=email,
+            username=user.get("username"),
+            user_id=user["id"],
+        )
 
         self._send_response_with_timing(200, {"user": create_user_response(user)}, demo_session_id)
 
@@ -1399,10 +1609,17 @@ class RealWorldHandler(BaseHTTPRequestHandler):
 
         # Log successful follow operation
         client_ip = self._get_client_ip()
-        log_structured(http_logger, logging.INFO,
+        log_structured(
+            http_logger,
+            logging.INFO,
             "User followed",
-            "CRUD", operation="follow_user", follower_id=user_id, followed_username=username,
-            followed_id=target_user['id'], ip=client_ip)
+            "CRUD",
+            operation="follow_user",
+            follower_id=user_id,
+            followed_username=username,
+            followed_id=target_user["id"],
+            ip=client_ip,
+        )
 
         self._send_response_with_timing(200, {"profile": create_profile_response(target_user, storage, user_id)})
 
@@ -1417,10 +1634,17 @@ class RealWorldHandler(BaseHTTPRequestHandler):
 
         # Log successful unfollow operation
         client_ip = self._get_client_ip()
-        log_structured(http_logger, logging.INFO,
+        log_structured(
+            http_logger,
+            logging.INFO,
             "User unfollowed",
-            "CRUD", operation="unfollow_user", follower_id=user_id, unfollowed_username=username,
-            unfollowed_id=target_user['id'], ip=client_ip)
+            "CRUD",
+            operation="unfollow_user",
+            follower_id=user_id,
+            unfollowed_username=username,
+            unfollowed_id=target_user["id"],
+            ip=client_ip,
+        )
 
         self._send_response_with_timing(200, {"profile": create_profile_response(target_user, storage, user_id)})
 
@@ -1539,10 +1763,18 @@ class RealWorldHandler(BaseHTTPRequestHandler):
 
         # Log successful article creation
         client_ip = self._get_client_ip()
-        log_structured(http_logger, logging.INFO,
+        log_structured(
+            http_logger,
+            logging.INFO,
             "Article created",
-            "CRUD", operation="create_article", slug=article['slug'], title=article['title'],
-            author_id=user_id, article_id=article['id'], ip=client_ip)
+            "CRUD",
+            operation="create_article",
+            slug=article["slug"],
+            title=article["title"],
+            author_id=user_id,
+            article_id=article["id"],
+            ip=client_ip,
+        )
 
         self._send_response_with_timing(201, {"article": create_article_response(article, storage, user_id)})
 
@@ -1569,16 +1801,16 @@ class RealWorldHandler(BaseHTTPRequestHandler):
         article_update = {}  # update this intermediary dict to prevent half-finished updates
         # Update fields if provided
         if "title" in article_data and article["title"] != article_data["title"]:  # additional check for slug
-            if (self._helper_article_field(article_data, "title", MAX_LEN_ARTICLE_TITLE)):
+            if self._helper_article_field(article_data, "title", MAX_LEN_ARTICLE_TITLE):
                 return
             article_update["title"] = article_data["title"]
             article_update["slug"] = self._helper_article_get_slug(storage, title)  # checked different title before
         if "description" in article_data:
-            if (self._helper_article_field(article_data, "description", MAX_LEN_ARTICLE_DESCRIPTION)):
+            if self._helper_article_field(article_data, "description", MAX_LEN_ARTICLE_DESCRIPTION):
                 return
             article_update["description"] = article_data["description"]
         if "body" in article_data:
-            if (self._helper_article_field(article_data, "body", MAX_LEN_ARTICLE_BODY)):
+            if self._helper_article_field(article_data, "body", MAX_LEN_ARTICLE_BODY):
                 return
             article_update["body"] = article_data["body"]
         article_update["updatedAt"] = get_current_time()
@@ -1587,10 +1819,18 @@ class RealWorldHandler(BaseHTTPRequestHandler):
         # Log successful article update
         client_ip = self._get_client_ip()
         updated_fields = list(article_update.keys())
-        log_structured(http_logger, logging.INFO,
+        log_structured(
+            http_logger,
+            logging.INFO,
             "Article updated",
-            "CRUD", operation="update_article", slug=slug, updated_fields=updated_fields,
-            author_id=user_id, article_id=article['id'], ip=client_ip)
+            "CRUD",
+            operation="update_article",
+            slug=slug,
+            updated_fields=updated_fields,
+            author_id=user_id,
+            article_id=article["id"],
+            ip=client_ip,
+        )
 
         self._send_response_with_timing(200, {"article": create_article_response(article, storage, user_id)})
 
@@ -1616,10 +1856,18 @@ class RealWorldHandler(BaseHTTPRequestHandler):
 
         # Log successful article deletion
         client_ip = self._get_client_ip()
-        log_structured(http_logger, logging.INFO,
+        log_structured(
+            http_logger,
+            logging.INFO,
             "Article deleted",
-            "CRUD", operation="delete_article", slug=slug, article_id=article_id,
-            author_id=user_id, deleted_comments_count=len(comments_to_delete), ip=client_ip)
+            "CRUD",
+            operation="delete_article",
+            slug=slug,
+            article_id=article_id,
+            author_id=user_id,
+            deleted_comments_count=len(comments_to_delete),
+            ip=client_ip,
+        )
 
         # Send 204 No Content
         self.send_response(204)
@@ -1690,10 +1938,18 @@ class RealWorldHandler(BaseHTTPRequestHandler):
 
         # Log successful comment creation
         client_ip = self._get_client_ip()
-        log_structured(http_logger, logging.INFO,
+        log_structured(
+            http_logger,
+            logging.INFO,
             "Comment created",
-            "CRUD", operation="create_comment", comment_id=comment['id'], slug=slug,
-            author_id=user_id, article_id=article['id'], ip=client_ip)
+            "CRUD",
+            operation="create_comment",
+            comment_id=comment["id"],
+            slug=slug,
+            author_id=user_id,
+            article_id=article["id"],
+            ip=client_ip,
+        )
 
         self._send_response_with_timing(200, {"comment": create_comment_response(comment, storage, user_id)})
 
@@ -1718,10 +1974,18 @@ class RealWorldHandler(BaseHTTPRequestHandler):
 
         # Log successful comment deletion
         client_ip = self._get_client_ip()
-        log_structured(http_logger, logging.INFO,
+        log_structured(
+            http_logger,
+            logging.INFO,
             "Comment deleted",
-            "CRUD", operation="delete_comment", comment_id=comment_id, slug=slug,
-            deleted_by_user_id=user_id, article_id=article['id'], ip=client_ip)
+            "CRUD",
+            operation="delete_comment",
+            comment_id=comment_id,
+            slug=slug,
+            deleted_by_user_id=user_id,
+            article_id=article["id"],
+            ip=client_ip,
+        )
 
         # Send 204 No Content
         self.send_response(204)
@@ -1751,20 +2015,47 @@ def run_server(port: int = 8000):
     # Log server startup
     log_structured(lifecycle_logger, logging.INFO, "RealWorld API Server starting", port=port)
     # Log security configuration
-    log_structured(config_logger, logging.INFO, "Security config",
-        isolation_disabled=DISABLE_ISOLATION_MODE, csrf_bypass=BYPASS_ORIGIN_CHECK, max_sessions=MAX_SESSIONS)
+    log_structured(
+        config_logger,
+        logging.INFO,
+        "Security config",
+        isolation_disabled=DISABLE_ISOLATION_MODE,
+        csrf_bypass=BYPASS_ORIGIN_CHECK,
+        max_sessions=MAX_SESSIONS,
+    )
     # Log data persistence configuration
-    log_structured(config_logger, logging.INFO, "Data persistence",
-        data_persistence=bool(DATA_FILE_PATH), data_file_path=str(DATA_FILE_PATH) if DATA_FILE_PATH else None)
+    log_structured(
+        config_logger,
+        logging.INFO,
+        "Data persistence",
+        data_persistence=bool(DATA_FILE_PATH),
+        data_file_path=str(DATA_FILE_PATH) if DATA_FILE_PATH else None,
+    )
     # Log resource limits
-    log_structured(config_logger, logging.INFO, "Resource limits",
-        max_users=MAX_USERS_PER_SESSION, max_articles=MAX_ARTICLES_PER_SESSION, max_comments=MAX_COMMENTS_PER_SESSION)
+    log_structured(
+        config_logger,
+        logging.INFO,
+        "Resource limits",
+        max_users=MAX_USERS_PER_SESSION,
+        max_articles=MAX_ARTICLES_PER_SESSION,
+        max_comments=MAX_COMMENTS_PER_SESSION,
+    )
     # Log estimated memory usage
-    log_structured(config_logger, logging.INFO, "Estimated max memory used by data - x2 in reality due to overhead",
-        max_memory_mb=NAIVE_SIZE_TOTAL / (1024*1024))
+    log_structured(
+        config_logger,
+        logging.INFO,
+        "Estimated max memory used by data - x2 in reality due to overhead",
+        max_memory_mb=NAIVE_SIZE_TOTAL / (1024 * 1024),
+    )
     # Log logging configuration
-    log_structured(config_logger, logging.INFO, "Logging config",
-        log_level=LOG_LEVEL, log_file=bool(LOG_FILE), log_file_path=LOG_FILE)
+    log_structured(
+        config_logger,
+        logging.INFO,
+        "Logging config",
+        log_level=LOG_LEVEL,
+        log_file=bool(LOG_FILE),
+        log_file_path=LOG_FILE,
+    )
     httpd = HTTPServer(("", port), RealWorldHandler)  # ty: ignore[invalid-argument-type]
     # Document routes - using print here
     print(f"RealWorld API Server running on http://localhost:{port}")
@@ -1814,7 +2105,6 @@ if __name__ == "__main__":
 
 
 class TestInMemoryModel(TestCase):
-
     def setUp(self):
         self.model = InMemoryModel(max_count=3)
 
@@ -1878,9 +2168,9 @@ class TestInMemoryModel(TestCase):
         self.model.add(obj4)
         self.assertEqual(
             self.model.objects,
-            {'2': {'name': 'test2', 'id': '2'}, '3': {'name': 'test3', 'id': '3'}, '4': {'name': 'test4', 'id': '4'}},
+            {"2": {"name": "test2", "id": "2"}, "3": {"name": "test3", "id": "3"}, "4": {"name": "test4", "id": "4"}},
         )
-        self.assertEqual(self.model.last_accessed_ids, ['2', '3', '4'])
+        self.assertEqual(self.model.last_accessed_ids, ["2", "3", "4"])
 
     def test_add_dict_with_existing_id_key(self):
         # Test adding object that already has an "id" key
@@ -1962,8 +2252,8 @@ class TestInMemoryModel(TestCase):
         result = self.model.delete("1")
         self.assertTrue(result)
         self.assertEqual(len(self.model.objects), 2)
-        self.assertEqual(self.model.objects, {'2': {'name': 'test2', 'id': '2'}, '3': {'name': 'test3', 'id': '3'}})
-        self.assertEqual(self.model.last_accessed_ids, ['2', '3'])
+        self.assertEqual(self.model.objects, {"2": {"name": "test2", "id": "2"}, "3": {"name": "test3", "id": "3"}})
+        self.assertEqual(self.model.last_accessed_ids, ["2", "3"])
 
     def test_delete_existing_object_with_multiple_objects_deletes_middle(self):
         self.model.add({"name": "test1"})
@@ -1973,8 +2263,8 @@ class TestInMemoryModel(TestCase):
         result = self.model.delete("2")
         self.assertTrue(result)
         self.assertEqual(len(self.model.objects), 2)
-        self.assertEqual(self.model.objects, {'1': {'name': 'test1', 'id': '1'}, '3': {'name': 'test3', 'id': '3'}})
-        self.assertEqual(self.model.last_accessed_ids, ['1', '3'])
+        self.assertEqual(self.model.objects, {"1": {"name": "test1", "id": "1"}, "3": {"name": "test3", "id": "3"}})
+        self.assertEqual(self.model.last_accessed_ids, ["1", "3"])
 
     def test_delete_existing_object_with_multiple_objects_deletes_last(self):
         self.model.add({"name": "test1"})
@@ -1984,8 +2274,8 @@ class TestInMemoryModel(TestCase):
         result = self.model.delete("3")
         self.assertTrue(result)
         self.assertEqual(len(self.model.objects), 2)
-        self.assertEqual(self.model.objects, {'1': {'name': 'test1', 'id': '1'}, '2': {'name': 'test2', 'id': '2'}})
-        self.assertEqual(self.model.last_accessed_ids, ['1', '2'])
+        self.assertEqual(self.model.objects, {"1": {"name": "test1", "id": "1"}, "2": {"name": "test2", "id": "2"}})
+        self.assertEqual(self.model.last_accessed_ids, ["1", "2"])
 
     def test_delete_nonexistent_object(self):
         result = self.model.delete("999")
@@ -2009,6 +2299,7 @@ class TestInMemoryModel(TestCase):
         # Create a model with a very low MAX_ID_LEN to test the limit
         original_max_id_len = MAX_ID_LEN
         import realworld_dummy_server
+
         realworld_dummy_server.MAX_ID_LEN = 1
         try:
             model = InMemoryModel(max_count=10)
@@ -2113,6 +2404,7 @@ class TestInMemoryModel(TestCase):
 
     def test_very_large_int_id(self):
         import sys
+
         very_large_id = sys.maxsize
         result = self.model.get(very_large_id)
         self.assertIsNone(result)
@@ -2167,7 +2459,6 @@ class TestInMemoryModel(TestCase):
 
 
 class TestInMemoryLinks(TestCase):
-
     def setUp(self):
         self.links = InMemoryLinks(max_count=3)
 
@@ -2424,7 +2715,6 @@ class TestInMemoryLinks(TestCase):
 
 
 class TestStorageContainer(TestCase):
-
     # Setup
 
     def setUp(self):
@@ -2441,13 +2731,13 @@ class TestStorageContainer(TestCase):
                 self.assertLessEqual(
                     container.heap[i][0],
                     container.heap[left_child][0],
-                    f"Heap property violated at index {i} and left child {left_child}"
+                    f"Heap property violated at index {i} and left child {left_child}",
                 )
             if right_child < len(container.heap):
                 self.assertLessEqual(
                     container.heap[i][0],
                     container.heap[right_child][0],
-                    f"Heap property violated at index {i} and right child {right_child}"
+                    f"Heap property violated at index {i} and right child {right_child}",
                 )
 
     def _verify_index_consistency(self, container):
@@ -2757,6 +3047,7 @@ class TestStorageContainer(TestCase):
     def test_large_heap_operations(self):
         # Stress test with many items
         import random
+
         random.seed(42)  # For reproducible tests
         items = []
         num_items = 100
@@ -2787,6 +3078,7 @@ class TestStorageContainer(TestCase):
     def test_boundary_priorities(self):
         # Test with extreme priority values
         import sys
+
         # Test with very large and small numbers
         self.container._push(sys.maxsize, "max_item", "max_data")
         self.container._push(-sys.maxsize, "min_item", "min_data")
@@ -2815,7 +3107,7 @@ class TestStorageContainer(TestCase):
             "123numeric_start",
             "",  # empty string
             "🎯emoji_id",
-            "very_long_" + "x" * 100 + "_id"
+            "very_long_" + "x" * 100 + "_id",
         ]
         for i, item_id in enumerate(special_ids):
             self.container._push(i + 1, item_id, f"data_{i}")
@@ -2835,10 +3127,10 @@ class TestStorageContainer(TestCase):
             self.container._push(priority, item_id, f"data_{item_id}")
         # Perform multiple updates that should change heap structure
         updates = [
-            ("f", 1),   # Move last to first
-            ("a", 100), # Move first to last
+            ("f", 1),  # Move last to first
+            ("a", 100),  # Move first to last
             ("c", 15),  # Minor adjustment
-            ("e", 5),   # Move middle to near front
+            ("e", 5),  # Move middle to near front
         ]
         for item_id, new_priority in updates:
             self.container._update_priority(item_id, new_priority)
@@ -2911,6 +3203,7 @@ class TestStorageContainer(TestCase):
     def test_max_sessions_is_working_with_a_sequence_of_calls_actually_triggering_reorders(self, log_structured_mock):
         # Test that accessing existing sessions updates their priority and affects eviction order
         import time
+
         max_sessions = 3
         container = _StorageContainer(disable_isolation_mode=False, max_sessions=max_sessions)
         # Create initial sessions
@@ -3194,177 +3487,177 @@ class TestStorageContainer(TestCase):
 class TestSaveAndLoadData(TestCase):
     TEST_DATA_FILE_PATH = Path("test-file-save-data-b29e89dd-d67a-4ef6-ab2d-09d6204771bf")
     TEST_DATA_EXPECTED_FILE_CONTENT = {
-      "session_2": {
-        "users": {
-          "objects": {
-            "1": {
-              "email": "user3@example.com",
-              "username": "user3",
-              "password": "hashed_password_3",
-              "bio": "Bio for user 3 in session 2",
-              "image": "https://example.com/user3.jpg",
-              "id": "1"
+        "session_2": {
+            "users": {
+                "objects": {
+                    "1": {
+                        "email": "user3@example.com",
+                        "username": "user3",
+                        "password": "hashed_password_3",
+                        "bio": "Bio for user 3 in session 2",
+                        "image": "https://example.com/user3.jpg",
+                        "id": "1",
+                    },
+                    "2": {
+                        "email": "user4@example.com",
+                        "username": "user4",
+                        "password": "hashed_password_4",
+                        "bio": "Bio for user 4 in session 2",
+                        "image": "https://example.com/user4.jpg",
+                        "id": "2",
+                    },
+                },
+                **{"last_accessed_ids": ["1", "2"]},
+                "current_id_counter": 3,
             },
-            "2": {
-              "email": "user4@example.com",
-              "username": "user4",
-              "password": "hashed_password_4",
-              "bio": "Bio for user 4 in session 2",
-              "image": "https://example.com/user4.jpg",
-              "id": "2"
-            }
-          },
-          **{"last_accessed_ids": ["1", "2"]},
-          "current_id_counter": 3
-        },
-        "articles": {
-          "objects": {
-            "1": {
-              "title": "Third Article in Session 2",
-              "description": "This article is in a different session",
-              "body": "Content for the third article in session 2",
-              **{"tagList": ["session2", "testing"]},
-              "author": "1",
-              "slug": "third-article-session2",
-              "id": "1"
-            }
-          },
-          **{"last_accessed_ids": ["1"]},
-          "current_id_counter": 2
-        },
-        "comments": {
-          **{"objects": {"1": {"body": "Comment from session 2", "author": "2", "article": "1", "id": "1"}}},
-          **{"last_accessed_ids": ["1"]},
-          "current_id_counter": 2
-        },
-        **{"follows": [["1", "2"]]},
-        **{"favorites": [["2", "1"]]},
-      },
-      "session_3": {
-        "users": {
-          "objects": {
-            "1": {
-              "email": "user5@example.com",
-              "username": "user5",
-              "password": "hashed_password_5",
-              "bio": "User 5 bio in session 3",
-              "image": "https://example.com/user5.jpg",
-              "id": "1"
+            "articles": {
+                "objects": {
+                    "1": {
+                        "title": "Third Article in Session 2",
+                        "description": "This article is in a different session",
+                        "body": "Content for the third article in session 2",
+                        **{"tagList": ["session2", "testing"]},
+                        "author": "1",
+                        "slug": "third-article-session2",
+                        "id": "1",
+                    }
+                },
+                **{"last_accessed_ids": ["1"]},
+                "current_id_counter": 2,
             },
-            "2": {
-              "email": "user6@example.com",
-              "username": "user6",
-              "password": "hashed_password_6",
-              "bio": "User 6 bio in session 3",
-              "image": "https://example.com/user6.jpg",
-              "id": "2"
+            "comments": {
+                **{"objects": {"1": {"body": "Comment from session 2", "author": "2", "article": "1", "id": "1"}}},
+                **{"last_accessed_ids": ["1"]},
+                "current_id_counter": 2,
             },
-            "3": {
-              "email": "user7@example.com",
-              "username": "user7",
-              "password": "hashed_password_7",
-              "bio": "User 7 bio in session 3",
-              "image": "https://example.com/user7.jpg",
-              "id": "3"
-            }
-          },
-          **{"last_accessed_ids": ["1", "2", "3"]},
-          "current_id_counter": 4
+            **{"follows": [["1", "2"]]},
+            **{"favorites": [["2", "1"]]},
         },
-        "articles": {
-          "objects": {
-            "1": {
-              "title": "Fourth Article Session 3",
-              "description": "Article 4 description",
-              "body": "Content for article 4 in session 3",
-              "tagList": ["session3", "multiple", "tags"],
-              "author": "1",
-              "slug": "fourth-article-session3",
-              "id": "1"
+        "session_3": {
+            "users": {
+                "objects": {
+                    "1": {
+                        "email": "user5@example.com",
+                        "username": "user5",
+                        "password": "hashed_password_5",
+                        "bio": "User 5 bio in session 3",
+                        "image": "https://example.com/user5.jpg",
+                        "id": "1",
+                    },
+                    "2": {
+                        "email": "user6@example.com",
+                        "username": "user6",
+                        "password": "hashed_password_6",
+                        "bio": "User 6 bio in session 3",
+                        "image": "https://example.com/user6.jpg",
+                        "id": "2",
+                    },
+                    "3": {
+                        "email": "user7@example.com",
+                        "username": "user7",
+                        "password": "hashed_password_7",
+                        "bio": "User 7 bio in session 3",
+                        "image": "https://example.com/user7.jpg",
+                        "id": "3",
+                    },
+                },
+                **{"last_accessed_ids": ["1", "2", "3"]},
+                "current_id_counter": 4,
             },
-            "2": {
-              "title": "Fifth Article Session 3",
-              "description": "Article 5 description",
-              "body": "Content for article 5 in session 3",
-              "tagList": ["more", "tags"],
-              "author": "2",
-              "slug": "fifth-article-session3",
-              "id": "2"
-            }
-          },
-          "last_accessed_ids": ["1", "2"],
-          "current_id_counter": 3
-        },
-        "comments": {
-          "objects": {
-            "1": {"body": "First comment in session 3","author": "2","article": "1","id": "1"},
-            "2": {"body": "Second comment in session 3","author": "3","article": "1","id": "2"},
-            "3": {"body": "Third comment in session 3","author": "1","article": "2","id": "3"}
-          },
-          **{"last_accessed_ids": ["1", "2", "3"]},
-          "current_id_counter": 4
-        },
-        **{"follows": [["1", "2"], ["2", "3"], ["3", "1"]]},
-        **{"favorites": [["1", "2"], ["2", "1"], ["3", "1"], ["3", "2"]]},
-      },
-      "session_1": {
-        "users": {
-          "objects": {
-            "1": {
-              "email": "user1@example.com",
-              "username": "user1",
-              "password": "hashed_password_1",
-              "bio": "Bio for user 1",
-              "image": "https://example.com/user1.jpg",
-              "id": "1"
+            "articles": {
+                "objects": {
+                    "1": {
+                        "title": "Fourth Article Session 3",
+                        "description": "Article 4 description",
+                        "body": "Content for article 4 in session 3",
+                        "tagList": ["session3", "multiple", "tags"],
+                        "author": "1",
+                        "slug": "fourth-article-session3",
+                        "id": "1",
+                    },
+                    "2": {
+                        "title": "Fifth Article Session 3",
+                        "description": "Article 5 description",
+                        "body": "Content for article 5 in session 3",
+                        "tagList": ["more", "tags"],
+                        "author": "2",
+                        "slug": "fifth-article-session3",
+                        "id": "2",
+                    },
+                },
+                "last_accessed_ids": ["1", "2"],
+                "current_id_counter": 3,
             },
-            "2": {
-              "email": "user2@example.com",
-              "username": "user2",
-              "password": "hashed_password_2",
-              "bio": "Bio for user 2",
-              "image": "https://example.com/user2.jpg",
-              "id": "2"
-            }
-          },
-          **{"last_accessed_ids": ["2", "1"]},
-          "current_id_counter": 3
-        },
-        "articles": {
-          "objects": {
-            "1": {
-              "title": "First Article",
-              "description": "Description of first article",
-              "body": "Body content of the first article with lots of text",
-              **{"tagList": ["tech", "programming"]},
-              "author": "1",
-              "slug": "first-article",
-              "id": "1"
+            "comments": {
+                "objects": {
+                    "1": {"body": "First comment in session 3", "author": "2", "article": "1", "id": "1"},
+                    "2": {"body": "Second comment in session 3", "author": "3", "article": "1", "id": "2"},
+                    "3": {"body": "Third comment in session 3", "author": "1", "article": "2", "id": "3"},
+                },
+                **{"last_accessed_ids": ["1", "2", "3"]},
+                "current_id_counter": 4,
             },
-            "2": {
-              "title": "Second Article",
-              "description": "Description of second article",
-              "body": "Body content of the second article",
-              **{"tagList": ["science", "research"]},
-              "author": "2",
-              "slug": "second-article",
-              "id": "2"
-            }
-          },
-          **{"last_accessed_ids": ["2", "1"]},
-          "current_id_counter": 3
+            **{"follows": [["1", "2"], ["2", "3"], ["3", "1"]]},
+            **{"favorites": [["1", "2"], ["2", "1"], ["3", "1"], ["3", "2"]]},
         },
-        "comments": {
-          "objects": {
-            **{"1": {"body": "Great article! Very informative.", "author": "2", "article": "1", "id": "1"}},
-            **{"2": {"body": "I disagree but gg.", "author": "1", "article": "1", "id": "2"}},
-          },
-          **{"last_accessed_ids": ["2", "1"]},
-          "current_id_counter": 3
+        "session_1": {
+            "users": {
+                "objects": {
+                    "1": {
+                        "email": "user1@example.com",
+                        "username": "user1",
+                        "password": "hashed_password_1",
+                        "bio": "Bio for user 1",
+                        "image": "https://example.com/user1.jpg",
+                        "id": "1",
+                    },
+                    "2": {
+                        "email": "user2@example.com",
+                        "username": "user2",
+                        "password": "hashed_password_2",
+                        "bio": "Bio for user 2",
+                        "image": "https://example.com/user2.jpg",
+                        "id": "2",
+                    },
+                },
+                **{"last_accessed_ids": ["2", "1"]},
+                "current_id_counter": 3,
+            },
+            "articles": {
+                "objects": {
+                    "1": {
+                        "title": "First Article",
+                        "description": "Description of first article",
+                        "body": "Body content of the first article with lots of text",
+                        **{"tagList": ["tech", "programming"]},
+                        "author": "1",
+                        "slug": "first-article",
+                        "id": "1",
+                    },
+                    "2": {
+                        "title": "Second Article",
+                        "description": "Description of second article",
+                        "body": "Body content of the second article",
+                        **{"tagList": ["science", "research"]},
+                        "author": "2",
+                        "slug": "second-article",
+                        "id": "2",
+                    },
+                },
+                **{"last_accessed_ids": ["2", "1"]},
+                "current_id_counter": 3,
+            },
+            "comments": {
+                "objects": {
+                    **{"1": {"body": "Great article! Very informative.", "author": "2", "article": "1", "id": "1"}},
+                    **{"2": {"body": "I disagree but gg.", "author": "1", "article": "1", "id": "2"}},
+                },
+                **{"last_accessed_ids": ["2", "1"]},
+                "current_id_counter": 3,
+            },
+            **{"follows": [["1", "2"]]},
+            **{"favorites": [["1", "2"], ["2", "1"]]},
         },
-        **{"follows": [["1", "2"]]},
-        **{"favorites": [["1", "2"], ["2", "1"]]},
-      }
     }
 
     def setUp(self):
@@ -3397,14 +3690,14 @@ class TestSaveAndLoadData(TestCase):
             "username": "user1",
             "password": "hashed_password_1",
             "bio": "Bio for user 1",
-            "image": "https://example.com/user1.jpg"
+            "image": "https://example.com/user1.jpg",
         }
         user2_data = {
             "email": "user2@example.com",
             "username": "user2",
             "password": "hashed_password_2",
             "bio": "Bio for user 2",
-            "image": "https://example.com/user2.jpg"
+            "image": "https://example.com/user2.jpg",
         }
         user1, user2 = storage1.users.add(user1_data), storage1.users.add(user2_data)
         storage1.users.get(user1["id"])  # reorders data
@@ -3415,7 +3708,7 @@ class TestSaveAndLoadData(TestCase):
             "body": "Body content of the first article with lots of text",
             "tagList": ["tech", "programming"],
             "author": user1["id"],
-            "slug": "first-article"
+            "slug": "first-article",
         }
         article2_data = {
             "title": "Second Article",
@@ -3423,7 +3716,7 @@ class TestSaveAndLoadData(TestCase):
             "body": "Body content of the second article",
             "tagList": ["science", "research"],
             "author": user2["id"],
-            "slug": "second-article"
+            "slug": "second-article",
         }
         article1, article2 = storage1.articles.add(article1_data), storage1.articles.add(article2_data)
         storage1.articles.get(article1["id"])  # reorders data
@@ -3443,14 +3736,14 @@ class TestSaveAndLoadData(TestCase):
             "username": "user3",
             "password": "hashed_password_3",
             "bio": "Bio for user 3 in session 2",
-            "image": "https://example.com/user3.jpg"
+            "image": "https://example.com/user3.jpg",
         }
         user4_data = {
             "email": "user4@example.com",
             "username": "user4",
             "password": "hashed_password_4",
             "bio": "Bio for user 4 in session 2",
-            "image": "https://example.com/user4.jpg"
+            "image": "https://example.com/user4.jpg",
         }
         user3 = storage2.users.add(user3_data)
         user4 = storage2.users.add(user4_data)
@@ -3461,7 +3754,7 @@ class TestSaveAndLoadData(TestCase):
             "body": "Content for the third article in session 2",
             "tagList": ["session2", "testing"],
             "author": user3["id"],
-            "slug": "third-article-session2"
+            "slug": "third-article-session2",
         }
         article3 = storage2.articles.add(article3_data)
         # Add comments and links to storage2
@@ -3475,21 +3768,21 @@ class TestSaveAndLoadData(TestCase):
             "username": "user5",
             "password": "hashed_password_5",
             "bio": "User 5 bio in session 3",
-            "image": "https://example.com/user5.jpg"
+            "image": "https://example.com/user5.jpg",
         }
         user6_data = {
             "email": "user6@example.com",
             "username": "user6",
             "password": "hashed_password_6",
             "bio": "User 6 bio in session 3",
-            "image": "https://example.com/user6.jpg"
+            "image": "https://example.com/user6.jpg",
         }
         user7_data = {
             "email": "user7@example.com",
             "username": "user7",
             "password": "hashed_password_7",
             "bio": "User 7 bio in session 3",
-            "image": "https://example.com/user7.jpg"
+            "image": "https://example.com/user7.jpg",
         }
         user5 = storage3.users.add(user5_data)
         user6 = storage3.users.add(user6_data)
@@ -3501,7 +3794,7 @@ class TestSaveAndLoadData(TestCase):
             "body": "Content for article 4 in session 3",
             "tagList": ["session3", "multiple", "tags"],
             "author": user5["id"],
-            "slug": "fourth-article-session3"
+            "slug": "fourth-article-session3",
         }
         article5_data = {
             "title": "Fifth Article Session 3",
@@ -3509,7 +3802,7 @@ class TestSaveAndLoadData(TestCase):
             "body": "Content for article 5 in session 3",
             "tagList": ["more", "tags"],
             "author": user6["id"],
-            "slug": "fifth-article-session3"
+            "slug": "fifth-article-session3",
         }
         article4 = storage3.articles.add(article4_data)
         article5 = storage3.articles.add(article5_data)
@@ -3541,7 +3834,7 @@ class TestSaveAndLoadData(TestCase):
     def test_load_data_complex(self, log_structured_mock):
         """Complex test for load_data using the same expected data structure"""
         global storage_container
-        with self.TEST_DATA_FILE_PATH.open('w') as f:
+        with self.TEST_DATA_FILE_PATH.open("w") as f:
             json.dump(self.TEST_DATA_EXPECTED_FILE_CONTENT, f)
         load_data()
         self.assertFalse(self.TEST_DATA_FILE_PATH.exists())  # ensure the existing file has been wiped on load
