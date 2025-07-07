@@ -25,3 +25,9 @@ test-dummy-server-unittest:
 
 submodules-fetch:
 	git submodule update --init
+
+########################
+# Lint
+
+lint:
+	uvx ruff format --line-length 120
