@@ -510,6 +510,8 @@ class InMemoryStorage:
         self.comments = InMemoryModel(max_count=MAX_COMMENTS_PER_SESSION)
         self.follows = InMemoryLinks(max_count=MAX_FOLLOWS_PER_SESSION)  # user_id -> followed user_ids
         self.favorites = InMemoryLinks(max_count=MAX_FAVORITES_PER_SESSION)  # user_id -> favorited article_ids
+        self.last_known_session = None  # str
+        self.last_known_jwt = None  # str
         if POPULATE_DEMO_DATA:
             populate_demo_data(self)
 
@@ -530,6 +532,8 @@ class _StorageContainer:
         self.MAX_SESSIONS = max_sessions
         self.heap = []  # list of (priority, obj_id, data, index, client_ip)
         self.index_map = {}  # session_id -> heap index
+        self.jwt_to_session = {}  # jwt_token -> session (one last_known_jwt per session, sould be a bijective relation)
+        self.jwt_to_session_order = []  # list of jwt_token
         self.ip_to_sessions = {}  # ip -> list of session_ids
         if not MAX_SESSIONS_PER_IP or MAX_SESSIONS_PER_IP < 1:
             raise ValueError(f"MAX_SESSIONS_PER_IP is set to {MAX_SESSIONS_PER_IP}, you need at least one")
@@ -753,32 +757,65 @@ class _StorageContainer:
         self._update_priority(obj_id, new_priority)
         self._handle_client_ip_and_session_priority(obj_id, client_ip)  # also manages session's ip != client_ip
 
-    def get_storage(self, identifier, client_ip=None):
+    def get_storage(self, session_id_from_cookie, client_ip=None, jwt_token=None):
         if self.DISABLE_ISOLATION_MODE:
             if not self.heap:
                 self.heap.append(InMemoryStorage())  # Not using expected implem
-            return self.heap[0]  # Heap is not filled with the expected lists
-        if not identifier:  # UNDOCUMENTED_DEMO_SESSION is not defined, but what if the logged-in user deleted it?
-            return InMemoryStorage()  # quick and dirty solution to prevent overwriting
-        storage_container_index = self.index_map.get(identifier)
+            return None, self.heap[0]  # Heap is not filled with the expected lists
+        target_session_id = session_id_from_cookie
+        if not target_session_id and jwt_token:
+            session_id_from_token = self.jwt_to_session.get(jwt_token)
+            if session_id_from_token and session_id_from_token in self.index_map:
+                target_session_id = session_id_from_token
+                self.jwt_to_session_order = [
+                    *(e for e in self.jwt_to_session_order if e != target_session_id),
+                    jwt_token,
+                ]
+        target_session_id = target_session_id or str(uuid.uuid4())
+        storage_container_index = self.index_map.get(target_session_id)
         if storage_container_index is None:  # create the session, push and pop manage the ip
             if len(self.index_map) >= self.MAX_SESSIONS:
                 evicted_session = self.pop()
                 if evicted_session:
                     log_structured(security_logger, logging.INFO,
                         "Rate limit reached - Session storage full, evicting session",
-                        rate_limit_type="session_storage", max_sessions=self.MAX_SESSIONS,
-                        evicted_session_id=evicted_session[1], new_session_id=identifier)
-            self.push(time_ns(), identifier, data=InMemoryStorage(), client_ip=client_ip)
+                        rate_limit_type="session_storage",
+                        max_sessions=self.MAX_SESSIONS,
+                        evicted_session_id=evicted_session[1],
+                        new_session_id=target_session_id
+                    )
+            self.push(time_ns(), target_session_id, data=InMemoryStorage(), client_ip=client_ip)
             log_structured(security_logger, logging.INFO, "New session created",
-                session_event="created", session_id=identifier, total_sessions=len(self.index_map),
-                client_ip=client_ip)
-            return self.heap[self.index_map.get(identifier)][2]
+                session_event="created",
+                session_id=target_session_id,
+                total_sessions=len(self.index_map),
+                client_ip=client_ip
+            )
+            return target_session_id, self.heap[self.index_map.get(target_session_id)][2]
         r = self.heap[storage_container_index][2]  # existing session
-        self.update_priority(identifier, time_ns(), client_ip=client_ip)  # manage priority and ip/session
+        self.update_priority(target_session_id, time_ns(), client_ip=client_ip)  # manage priority and ip/session
         log_structured(storage_logger, logging.DEBUG, "Session accessed",
-            session_event="accessed", session_id=identifier)
-        return r
+            session_event="accessed",
+            session_id_from_cookie=session_id_from_cookie,
+            target_session_id=target_session_id,
+        )
+        return target_session_id, r
+
+    def bind_jwt_to_session_id(self, jwt_token, session_id):
+        """
+        Binds a JWT token to existing session storage
+        This method must only be called after a storage has already been retrieved for that session_id
+        This method is expected to only be called during the login and registration processes
+        (hence why it is acceptable to let it be algorithmically inefficient)
+        """
+        if self.DISABLE_ISOLATION_MODE:
+            return
+        jwt_tokens_to_remove = {t for t, s in self.jwt_to_session.items() if t == jwt_token or s == session_id}
+        if len(self.jwt_to_session_order) >= MAX_SESSIONS:
+            jwt_tokens_to_remove.add(self.jwt_to_session_order[0])
+        self.jwt_to_session_order = [t for t in self.jwt_to_session_order if t not in jwt_tokens_to_remove]
+        for jwt_token_to_remove in jwt_tokens_to_remove:
+            del self.jwt_to_session_order[jwt_token_to_remove]
 
 
 storage_container = _StorageContainer()
@@ -1044,32 +1081,32 @@ class RealWorldHandler(BaseHTTPRequestHandler):
     def _handle_request(self, method: str):
         """Route request to appropriate handler"""
         self._request_start_time = time_ns()
+        # Get base token
+        # Get other request infos
         client_ip = self._get_client_ip()
-        storage = storage_container.get_storage(self._get_demo_session_cookie(), client_ip)
         parsed = urlparse(self.path)
         path = parsed.path
         self._request_method = method
         self._request_path = path
+        auth_header = self.headers.get("Authorization", "")
+        token = auth_header.replace("Token ", "") if auth_header.startswith("Token ") else None
+        target_session_id, storage = storage_container.get_storage(
+            self._get_demo_session_cookie() if self._check_csrf_protection() else None, client_ip, token
+        )
         query_params = parse_qs(parsed.query)
         # Remove leading slash and split path
         path_parts = path.strip("/").split("/")
         # Get authorization header
-        auth_header = self.headers.get("Authorization", "")
-        token = auth_header.replace("Token ", "") if auth_header.startswith("Token ") else None
         current_user_id = verify_token(token, storage, client_ip) if token else None
-
         # Log request start
         log_structured(http_logger, logging.INFO,
             "Request started",
             method=method, path=path, ip=client_ip, user_id=current_user_id)
-        # Secure CSRF with origins, populated POST with JSON or PUT/DELETE/PATCH
-        if method != "GET" and not self._check_csrf_protection():
-            return self._send_error(403, {"errors": {"body": ["Origin header required for CSRF protection"]}})
         # Route to handlers
         if method == "POST" and path == "/users":
-            self._handle_register(storage)
+            self._handle_register(storage, target_session_id)
         elif method == "POST" and path == "/users/login":
-            self._handle_login(storage)
+            self._handle_login(storage, target_session_id)
         elif method == "GET" and path == "/user":
             self._handle_get_current_user(storage, current_user_id)
         elif method == "PUT" and path == "/user":
@@ -1143,7 +1180,7 @@ class RealWorldHandler(BaseHTTPRequestHandler):
                 return cookie.split("=", 1)[1]
         return None
 
-    def _send_response(self, status_code: int, data: Dict, demo_session_id: Optional[uuid.UUID] = None,
+    def _send_response(self, status_code: int, data: Dict, demo_session_id: Optional[str] = None,
                        start_time: int = None, method: str = None, path: str = None):
         """Send JSON response"""
         self.send_response(status_code)
@@ -1183,23 +1220,24 @@ class RealWorldHandler(BaseHTTPRequestHandler):
         self._send_response(status_code, data, demo_session_id, start_time, method, path)
 
     def _check_csrf_protection(self) -> bool:
-        """Check CSRF protection using Origin header for POST requests"""
+        """Check CSRF protection using Origin header for non-GET requests"""
         origin = self.headers.get("Origin")
         client_ip = self._get_client_ip()
-
+        if self._request_method == "GET":
+            log_structured(security_logger, logging.DEBUG, "no CSRF protection for GET",
+                ip=client_ip, origin=origin, bypass=True)
+            return True
         if BYPASS_ORIGIN_CHECK:
             log_structured(security_logger, logging.DEBUG, "CSRF protection bypassed",
                 ip=client_ip, origin=origin, bypass=True)
             return True
-
         if origin in ALLOWED_ORIGINS:
             log_structured(security_logger, logging.DEBUG, "CSRF protection passed",
                 ip=client_ip, origin=origin)
             return True
-        else:
-            log_structured(security_logger, logging.WARNING, "CSRF protection failed",
-                ip=client_ip, origin=origin, allowed_origins=ALLOWED_ORIGINS)
-            return False
+        log_structured(security_logger, logging.WARNING, "CSRF protection failed",
+            ip=client_ip, origin=origin, allowed_origins=ALLOWED_ORIGINS)
+        return False
 
     def _require_auth(self, current_user_id: Optional[int]) -> int:
         """Require authentication, return user_id or raise error"""
@@ -1214,7 +1252,7 @@ class RealWorldHandler(BaseHTTPRequestHandler):
 
     # Auth endpoints
 
-    def _handle_register(self, storage: InMemoryStorage):
+    def _handle_register(self, storage: InMemoryStorage, demo_session_id: str):
         """POST /users - Register new user"""
         data = self._get_request_body()
         user_data = data.get("user", {})
@@ -1260,16 +1298,15 @@ class RealWorldHandler(BaseHTTPRequestHandler):
         user_id = user["id"]
         # Generate token after we have the user_id
         token = generate_token(user_id)
+        storage_container.bind_jwt_to_session_id(token, demo_session_id)
         user["token"] = token
-        demo_session_id = None if self._get_demo_session_cookie() else uuid.uuid4()
-
         log_structured(auth_logger, logging.INFO,
             "User registered successfully",
             ip=client_ip, email=email, username=username, user_id=user_id)
 
         self._send_response_with_timing(201, {"user": create_user_response(user)}, demo_session_id)
 
-    def _handle_login(self, storage: InMemoryStorage):
+    def _handle_login(self, storage: InMemoryStorage, demo_session_id: str):
         """POST /users/login - Login user"""
         data = self._get_request_body()
         user_data = data.get("user", {})
@@ -1294,8 +1331,7 @@ class RealWorldHandler(BaseHTTPRequestHandler):
             return
 
         user["token"] = generate_token(user["id"])  # Generate new token
-        demo_session_id = None if self._get_demo_session_cookie() else uuid.uuid4()
-
+        storage_container.bind_jwt_to_session_id(user["token"], demo_session_id)
         log_structured(auth_logger, logging.INFO,
             "User logged in successfully",
             ip=client_ip, email=email, username=user.get('username'), user_id=user['id'])
@@ -2535,9 +2571,9 @@ class TestStorageContainer(TestCase):
 
     def test_get_storage_with_isolation_disabled(self):
         container = _StorageContainer(disable_isolation_mode=True)
-        storage0 = container.get_storage(None)
-        storage1 = container.get_storage("session1")
-        storage2 = container.get_storage("session2")
+        _, storage0 = container.get_storage(None)
+        _, storage1 = container.get_storage("session1")
+        _, storage2 = container.get_storage("session2")
         # All should return the same storage
         self.assertIs(storage1, storage0)
         self.assertIs(storage2, storage0)
@@ -2545,33 +2581,33 @@ class TestStorageContainer(TestCase):
     @patch("realworld_dummy_server.log_structured")
     def test_get_storage_with_isolation_enabled_2_different_session(self, log_structured_mock):
         container = _StorageContainer(disable_isolation_mode=False)
-        storage1 = container.get_storage("session1")
-        storage2 = container.get_storage("session2")
+        _, storage1 = container.get_storage("session1")
+        _, storage2 = container.get_storage("session2")
         # Different sessions should get different storage
         self.assertIsNot(storage1, storage2)
 
     @patch("realworld_dummy_server.log_structured")
     def test_get_storage_with_isolation_enabled_2_same(self, log_structured_mock):
         container = _StorageContainer(disable_isolation_mode=False)
-        storage1 = container.get_storage("session1")
+        _, storage1 = container.get_storage("session1")
         container.get_storage("something-else")  # Call to other session in between
-        storage1_bis = container.get_storage("session1")
+        _, storage1_bis = container.get_storage("session1")
         # Storage containers from the same id should get the same storage
         self.assertIs(storage1, storage1_bis)
 
     def test_get_storage_with_isolation_enabled_2_default_sessions_are_not_the_same_none_version(self):
         """We don't want the modifications of a default session to have an impact for other users"""
         container = _StorageContainer(disable_isolation_mode=False)
-        storage1 = container.get_storage(None)
-        storage2 = container.get_storage(None)
+        _, storage1 = container.get_storage(None)
+        _, storage2 = container.get_storage(None)
         # Multiple defaults sessions should get different storage
         self.assertIsNot(storage1, storage2)
 
     def test_get_storage_with_isolation_enabled_2_default_sessions_are_not_the_same_empty_string_version(self):
         """We don't want the modifications of a default session to have an impact for other users"""
         container = _StorageContainer(disable_isolation_mode=False)
-        storage1 = container.get_storage("")
-        storage2 = container.get_storage("")
+        _, storage1 = container.get_storage("")
+        _, storage2 = container.get_storage("")
         # Multiple defaults sessions should get different storage
         self.assertIsNot(storage1, storage2)
 
@@ -2845,7 +2881,7 @@ class TestStorageContainer(TestCase):
         storages = []
         for i in range(max_sessions):
             session_id = f"session_{i}"
-            storage = container.get_storage(session_id)
+            _, storage = container.get_storage(session_id)
             storages.append(storage)
             # Verify storage was created
             self.assertIsNotNone(storage)
@@ -2859,7 +2895,7 @@ class TestStorageContainer(TestCase):
         self.assertEqual(len(container.heap), max_sessions)
         # Add one more session - should evict the oldest (first) session
         new_session_id = "session_new"
-        new_storage = container.get_storage(new_session_id)
+        _, new_storage = container.get_storage(new_session_id)
         # Verify heap properties after eviction and insertion
         self._verify_heap_property(container)
         self._verify_index_consistency(container)
@@ -3352,9 +3388,9 @@ class TestSaveAndLoadData(TestCase):
         """Complex test for save_data with multiple storages containing comprehensive data"""
         global storage_container
         # Create multiple storage sessions with comprehensive data
-        storage1 = storage_container.get_storage("session_1")
-        storage2 = storage_container.get_storage("session_2")
-        storage3 = storage_container.get_storage("session_3")
+        _, storage1 = storage_container.get_storage("session_1")
+        _, storage2 = storage_container.get_storage("session_2")
+        _, storage3 = storage_container.get_storage("session_3")
         # Populate storage1 with multiple users
         user1_data = {
             "email": "user1@example.com",
@@ -3493,7 +3529,7 @@ class TestSaveAndLoadData(TestCase):
         storage3.favorites.add(user7["id"], article4["id"])  # user7 favorites article4
         storage3.favorites.add(user7["id"], article5["id"])  # user7 favorites article5
         # This should reorder the storages in output
-        storage1 = storage_container.get_storage("session_1")
+        _, storage1 = storage_container.get_storage("session_1")
         # Call save_data to save all the populated data
         save_data()
         with self.TEST_DATA_FILE_PATH.open() as f:
