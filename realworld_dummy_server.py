@@ -3446,45 +3446,63 @@ class TestStorageContainer(TestCase):
 
     def test_get_storage_with_isolation_disabled(self):
         container = _StorageContainer(disable_isolation_mode=True)
-        _, storage0 = container.get_storage(None)
-        _, storage1 = container.get_storage("session1")
-        _, storage2 = container.get_storage("session2")
+        id0, storage0 = container.get_storage(None)
+        id1, storage1 = container.get_storage("session1")
+        id2, storage2 = container.get_storage("session2")
         # All should return the same storage
         self.assertIs(storage1, storage0)
         self.assertIs(storage2, storage0)
+        # Check returned IDs
+        self.assertIsNone(id0)
+        self.assertIsNone(id1)
+        self.assertIsNone(id2)
 
     @patch("realworld_dummy_server.log_structured")
     def test_get_storage_with_isolation_enabled_2_different_session(self, log_structured_mock):
         container = _StorageContainer(disable_isolation_mode=False)
-        _, storage1 = container.get_storage("session1")
-        _, storage2 = container.get_storage("session2")
+        id1, storage1 = container.get_storage("session1")
+        id2, storage2 = container.get_storage("session2")
         # Different sessions should get different storage
         self.assertIsNot(storage1, storage2)
+        # Check returned IDs
+        self.assertEqual(id1, "session1")
+        self.assertEqual(id2, "session2")
 
     @patch("realworld_dummy_server.log_structured")
     def test_get_storage_with_isolation_enabled_2_same(self, log_structured_mock):
         container = _StorageContainer(disable_isolation_mode=False)
-        _, storage1 = container.get_storage("session1")
+        id1, storage1 = container.get_storage("session1")
         container.get_storage("something-else")  # Call to other session in between
-        _, storage1_bis = container.get_storage("session1")
+        id1_bis, storage1_bis = container.get_storage("session1")
         # Storage containers from the same id should get the same storage
         self.assertIs(storage1, storage1_bis)
+        # Check returned IDs
+        self.assertEqual(id1, "session1")
+        self.assertEqual(id1_bis, "session1")
 
     def test_get_storage_with_isolation_enabled_2_default_sessions_are_not_the_same_none_version(self):
         """We don't want the modifications of a default session to have an impact for other users"""
         container = _StorageContainer(disable_isolation_mode=False)
-        _, storage1 = container.get_storage(None)
-        _, storage2 = container.get_storage(None)
+        id1, storage1 = container.get_storage(None)
+        id2, storage2 = container.get_storage(None)
         # Multiple defaults sessions should get different storage
         self.assertIsNot(storage1, storage2)
+        # Check returned IDs - they should be different UUIDs
+        self.assertIsNotNone(id1)
+        self.assertIsNotNone(id2)
+        self.assertNotEqual(id1, id2)
 
     def test_get_storage_with_isolation_enabled_2_default_sessions_are_not_the_same_empty_string_version(self):
         """We don't want the modifications of a default session to have an impact for other users"""
         container = _StorageContainer(disable_isolation_mode=False)
-        _, storage1 = container.get_storage("")
-        _, storage2 = container.get_storage("")
+        id1, storage1 = container.get_storage("")
+        id2, storage2 = container.get_storage("")
         # Multiple defaults sessions should get different storage
         self.assertIsNot(storage1, storage2)
+        # Check returned IDs - they should be different UUIDs
+        self.assertIsNotNone(id1)
+        self.assertIsNotNone(id2)
+        self.assertNotEqual(id1, id2)
 
     @patch("realworld_dummy_server.log_structured")
     def test_get_storage_with_jwt_token_existing_session(self, log_structured_mock):
