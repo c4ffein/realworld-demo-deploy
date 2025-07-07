@@ -924,7 +924,10 @@ class _StorageContainer:
             jwt_tokens_to_remove.add(self.jwt_to_session_order[0])
         self.jwt_to_session_order = [t for t in self.jwt_to_session_order if t not in jwt_tokens_to_remove]
         for jwt_token_to_remove in jwt_tokens_to_remove:
-            del self.jwt_to_session_order[jwt_token_to_remove]
+            del self.jwt_to_session[jwt_token_to_remove]
+        # Bind the JWT token to the session
+        self.jwt_to_session[jwt_token] = session_id
+        self.jwt_to_session_order.append(jwt_token)
 
 
 storage_container = _StorageContainer()
@@ -2857,48 +2860,6 @@ class TestStorageContainer(TestCase):
             self.container._update_priority("nonexistent", 10)
         self.assertIn("not found in heap", str(context.exception))
 
-    def test_get_storage_with_isolation_disabled(self):
-        container = _StorageContainer(disable_isolation_mode=True)
-        _, storage0 = container.get_storage(None)
-        _, storage1 = container.get_storage("session1")
-        _, storage2 = container.get_storage("session2")
-        # All should return the same storage
-        self.assertIs(storage1, storage0)
-        self.assertIs(storage2, storage0)
-
-    @patch("realworld_dummy_server.log_structured")
-    def test_get_storage_with_isolation_enabled_2_different_session(self, log_structured_mock):
-        container = _StorageContainer(disable_isolation_mode=False)
-        _, storage1 = container.get_storage("session1")
-        _, storage2 = container.get_storage("session2")
-        # Different sessions should get different storage
-        self.assertIsNot(storage1, storage2)
-
-    @patch("realworld_dummy_server.log_structured")
-    def test_get_storage_with_isolation_enabled_2_same(self, log_structured_mock):
-        container = _StorageContainer(disable_isolation_mode=False)
-        _, storage1 = container.get_storage("session1")
-        container.get_storage("something-else")  # Call to other session in between
-        _, storage1_bis = container.get_storage("session1")
-        # Storage containers from the same id should get the same storage
-        self.assertIs(storage1, storage1_bis)
-
-    def test_get_storage_with_isolation_enabled_2_default_sessions_are_not_the_same_none_version(self):
-        """We don't want the modifications of a default session to have an impact for other users"""
-        container = _StorageContainer(disable_isolation_mode=False)
-        _, storage1 = container.get_storage(None)
-        _, storage2 = container.get_storage(None)
-        # Multiple defaults sessions should get different storage
-        self.assertIsNot(storage1, storage2)
-
-    def test_get_storage_with_isolation_enabled_2_default_sessions_are_not_the_same_empty_string_version(self):
-        """We don't want the modifications of a default session to have an impact for other users"""
-        container = _StorageContainer(disable_isolation_mode=False)
-        _, storage1 = container.get_storage("")
-        _, storage2 = container.get_storage("")
-        # Multiple defaults sessions should get different storage
-        self.assertIsNot(storage1, storage2)
-
     def test_heap_index_consistency(self):
         # Test that index_map stays consistent with heap positions
         items = [(10, "a"), (5, "b"), (15, "c"), (3, "d"), (7, "e"), (12, "f")]
@@ -3480,6 +3441,182 @@ class TestStorageContainer(TestCase):
         ipv6_normalized = "2001:db8:85a3:8d3::/64"
         result = self.container._normalize_ip_for_limiting(ipv6_normalized)
         self.assertEqual(result, ipv6_normalized)
+
+    # Tests - get_storage
+
+    def test_get_storage_with_isolation_disabled(self):
+        container = _StorageContainer(disable_isolation_mode=True)
+        _, storage0 = container.get_storage(None)
+        _, storage1 = container.get_storage("session1")
+        _, storage2 = container.get_storage("session2")
+        # All should return the same storage
+        self.assertIs(storage1, storage0)
+        self.assertIs(storage2, storage0)
+
+    @patch("realworld_dummy_server.log_structured")
+    def test_get_storage_with_isolation_enabled_2_different_session(self, log_structured_mock):
+        container = _StorageContainer(disable_isolation_mode=False)
+        _, storage1 = container.get_storage("session1")
+        _, storage2 = container.get_storage("session2")
+        # Different sessions should get different storage
+        self.assertIsNot(storage1, storage2)
+
+    @patch("realworld_dummy_server.log_structured")
+    def test_get_storage_with_isolation_enabled_2_same(self, log_structured_mock):
+        container = _StorageContainer(disable_isolation_mode=False)
+        _, storage1 = container.get_storage("session1")
+        container.get_storage("something-else")  # Call to other session in between
+        _, storage1_bis = container.get_storage("session1")
+        # Storage containers from the same id should get the same storage
+        self.assertIs(storage1, storage1_bis)
+
+    def test_get_storage_with_isolation_enabled_2_default_sessions_are_not_the_same_none_version(self):
+        """We don't want the modifications of a default session to have an impact for other users"""
+        container = _StorageContainer(disable_isolation_mode=False)
+        _, storage1 = container.get_storage(None)
+        _, storage2 = container.get_storage(None)
+        # Multiple defaults sessions should get different storage
+        self.assertIsNot(storage1, storage2)
+
+    def test_get_storage_with_isolation_enabled_2_default_sessions_are_not_the_same_empty_string_version(self):
+        """We don't want the modifications of a default session to have an impact for other users"""
+        container = _StorageContainer(disable_isolation_mode=False)
+        _, storage1 = container.get_storage("")
+        _, storage2 = container.get_storage("")
+        # Multiple defaults sessions should get different storage
+        self.assertIsNot(storage1, storage2)
+
+    @patch("realworld_dummy_server.log_structured")
+    def test_get_storage_with_jwt_token_existing_session(self, log_structured_mock):
+        """Test get_storage with JWT token that maps to existing session"""
+        container = _StorageContainer(disable_isolation_mode=False)
+        # First create a session
+        session_id, storage = container.get_storage("test_session")
+        # Bind JWT to session
+        container.jwt_to_session["test_jwt"] = session_id
+        container.jwt_to_session_order.append("test_jwt")
+        # Now get storage using JWT token
+        returned_session_id, returned_storage = container.get_storage(None, jwt_token="test_jwt")
+        # Should return the same session and storage
+        self.assertEqual(returned_session_id, session_id)
+        self.assertIs(returned_storage, storage)
+        # JWT should be moved to end of order list
+        self.assertEqual(container.jwt_to_session_order[-1], "test_jwt")
+
+    @patch("realworld_dummy_server.log_structured")
+    def test_get_storage_with_jwt_token_nonexistent_session(self, log_structured_mock):
+        """Test get_storage with JWT token that maps to nonexistent session"""
+        container = _StorageContainer(disable_isolation_mode=False)
+        # Bind JWT to nonexistent session
+        container.jwt_to_session["test_jwt"] = "nonexistent_session"
+        container.jwt_to_session_order.append("test_jwt")
+        # Get storage using JWT token
+        session_id, storage = container.get_storage(None, jwt_token="test_jwt")
+        # Should create new session since mapped session doesn't exist
+        self.assertIsNotNone(session_id)
+        self.assertIsInstance(storage, InMemoryStorage)
+
+    @patch("realworld_dummy_server.log_structured")
+    def test_get_storage_with_jwt_token_no_mapping(self, log_structured_mock):
+        """Test get_storage with JWT token that has no session mapping"""
+        container = _StorageContainer(disable_isolation_mode=False)
+        # Get storage using unmapped JWT token
+        session_id, storage = container.get_storage(None, jwt_token="unmapped_jwt")
+        # Should create new session
+        self.assertIsNotNone(session_id)
+        self.assertIsInstance(storage, InMemoryStorage)
+
+    @patch("realworld_dummy_server.log_structured")
+    def test_get_storage_cookie_priority_over_jwt(self, log_structured_mock):
+        """Test that session cookie takes priority over JWT token"""
+        container = _StorageContainer(disable_isolation_mode=False)
+        # Create session via cookie
+        cookie_session_id, cookie_storage = container.get_storage("cookie_session")
+        # Create different session and bind JWT to it
+        jwt_session_id, jwt_storage = container.get_storage("jwt_session")
+        container.jwt_to_session["test_jwt"] = jwt_session_id
+        container.jwt_to_session_order.append("test_jwt")
+        # Get storage with both cookie and JWT
+        returned_session_id, returned_storage = container.get_storage("cookie_session", jwt_token="test_jwt")
+        # Should return cookie session, not JWT session
+        self.assertEqual(returned_session_id, cookie_session_id)
+        self.assertIs(returned_storage, cookie_storage)
+
+    @patch("realworld_dummy_server.log_structured")
+    def test_get_storage_max_sessions_eviction(self, log_structured_mock):
+        """Test that max sessions limit triggers eviction"""
+        container = _StorageContainer(disable_isolation_mode=False, max_sessions=2)
+        # Create max sessions
+        container.get_storage("session1")
+        container.get_storage("session2")
+        # Creating third session should trigger eviction
+        session_id, storage = container.get_storage("session3")
+        # Should have exactly max_sessions entries
+        self.assertEqual(len(container.index_map), 2)
+        self.assertIsNotNone(session_id)
+        self.assertIsInstance(storage, InMemoryStorage)
+
+    # Tests - bind_jwt_to_session_id
+
+    def test_bind_jwt_to_session_id_with_isolation_disabled(self):
+        """Test bind_jwt_to_session_id when isolation mode is disabled"""
+        container = _StorageContainer(disable_isolation_mode=True)
+        # Should do nothing when isolation disabled
+        container.bind_jwt_to_session_id("test_jwt", "test_session")
+        # JWT mappings should remain empty
+        self.assertEqual(len(container.jwt_to_session), 0)
+        self.assertEqual(len(container.jwt_to_session_order), 0)
+
+    def test_bind_jwt_to_session_id_new_binding(self):
+        """Test binding new JWT token to session"""
+        container = _StorageContainer(disable_isolation_mode=False)
+        # Bind JWT to session
+        container.bind_jwt_to_session_id("test_jwt", "test_session")
+        # JWT should be bound to session
+        self.assertEqual(container.jwt_to_session["test_jwt"], "test_session")
+        self.assertIn("test_jwt", container.jwt_to_session_order)
+
+    def test_bind_jwt_to_session_id_replace_existing_jwt(self):
+        """Test replacing existing JWT token mapping"""
+        container = _StorageContainer(disable_isolation_mode=False)
+        # Create initial binding
+        container.jwt_to_session["test_jwt"] = "old_session"
+        container.jwt_to_session_order.append("test_jwt")
+        # Replace binding
+        container.bind_jwt_to_session_id("test_jwt", "new_session")
+        # JWT should be bound to new session
+        self.assertEqual(container.jwt_to_session["test_jwt"], "new_session")
+        self.assertIn("test_jwt", container.jwt_to_session_order)
+
+    def test_bind_jwt_to_session_id_replace_session_mapping(self):
+        """Test replacing session that already has JWT mapping"""
+        container = _StorageContainer(disable_isolation_mode=False)
+        # Create initial binding
+        container.jwt_to_session["old_jwt"] = "test_session"
+        container.jwt_to_session_order.append("old_jwt")
+        # Bind new JWT to same session
+        container.bind_jwt_to_session_id("new_jwt", "test_session")
+        # Old JWT should be removed, new JWT should be bound
+        self.assertNotIn("old_jwt", container.jwt_to_session)
+        self.assertEqual(container.jwt_to_session["new_jwt"], "test_session")
+        self.assertNotIn("old_jwt", container.jwt_to_session_order)
+        self.assertIn("new_jwt", container.jwt_to_session_order)
+
+    def test_bind_jwt_to_session_id_max_sessions_eviction(self):
+        """Test that max sessions limit triggers JWT eviction"""
+        container = _StorageContainer(disable_isolation_mode=False)
+        # Fill up to max sessions
+        for i in range(MAX_SESSIONS):
+            container.jwt_to_session[f"jwt_{i}"] = f"session_{i}"
+            container.jwt_to_session_order.append(f"jwt_{i}")
+        # Bind new JWT should evict oldest
+        container.bind_jwt_to_session_id("new_jwt", "new_session")
+        # Oldest JWT should be removed
+        self.assertNotIn("jwt_0", container.jwt_to_session)
+        self.assertNotIn("jwt_0", container.jwt_to_session_order)
+        # New JWT should be bound
+        self.assertEqual(container.jwt_to_session["new_jwt"], "new_session")
+        self.assertIn("new_jwt", container.jwt_to_session_order)
 
 
 class TestSaveAndLoadData(TestCase):
