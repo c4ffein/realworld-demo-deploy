@@ -869,7 +869,7 @@ class _StorageContainer:
             if session_id_from_token and session_id_from_token in self.index_map:
                 target_session_id = session_id_from_token
                 self.jwt_to_session_order = [
-                    *(e for e in self.jwt_to_session_order if e != target_session_id),
+                    *(e for e in self.jwt_to_session_order if e != jwt_token),
                     jwt_token,
                 ]
         target_session_id = target_session_id or str(uuid.uuid4())
