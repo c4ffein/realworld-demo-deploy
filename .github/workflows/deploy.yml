@@ -35,7 +35,7 @@ jobs:
       - name: Frontend patching  # no var env for backend configuration + withCrendentials for cross domain cookie
         run: |
           mv patch-frontend-api-url-and-cookies.patch angular-realworld-example-app
-          cd changular-realworld-example-app
+          cd angular-realworld-example-app
           git apply patch-frontend-api-url-and-cookies.patch
 
       - name: Build your site
