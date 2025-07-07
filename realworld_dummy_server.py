@@ -869,7 +869,7 @@ class _StorageContainer:
             if session_id_from_token and session_id_from_token in self.index_map:
                 target_session_id = session_id_from_token
                 self.jwt_to_session_order = [
-                    *(e for e in self.jwt_to_session_order if e != jwt_token),
+                    *(e for e in self.jwt_to_session_order if e != target_session_id),
                     jwt_token,
                 ]
         target_session_id = target_session_id or str(uuid.uuid4())
@@ -920,7 +920,7 @@ class _StorageContainer:
         if self.DISABLE_ISOLATION_MODE:
             return
         jwt_tokens_to_remove = {t for t, s in self.jwt_to_session.items() if t == jwt_token or s == session_id}
-        if len(self.jwt_to_session_order) >= MAX_SESSIONS:
+        if len(self.jwt_to_session_order) >= self.MAX_SESSIONS:
             jwt_tokens_to_remove.add(self.jwt_to_session_order[0])
         self.jwt_to_session_order = [t for t in self.jwt_to_session_order if t not in jwt_tokens_to_remove]
         for jwt_token_to_remove in jwt_tokens_to_remove:
@@ -3480,7 +3480,10 @@ class TestStorageContainer(TestCase):
         self.assertEqual(id1, "session1")
         self.assertEqual(id1_bis, "session1")
 
-    def test_get_storage_with_isolation_enabled_2_default_sessions_are_not_the_same_none_version(self):
+    @patch("realworld_dummy_server.log_structured")
+    def test_get_storage_with_isolation_enabled_2_default_sessions_are_not_the_same_none_version(
+        self, log_structured_mock
+    ):
         """We don't want the modifications of a default session to have an impact for other users"""
         container = _StorageContainer(disable_isolation_mode=False)
         id1, storage1 = container.get_storage(None)
@@ -3492,7 +3495,10 @@ class TestStorageContainer(TestCase):
         self.assertIsNotNone(id2)
         self.assertNotEqual(id1, id2)
 
-    def test_get_storage_with_isolation_enabled_2_default_sessions_are_not_the_same_empty_string_version(self):
+    @patch("realworld_dummy_server.log_structured")
+    def test_get_storage_with_isolation_enabled_2_default_sessions_are_not_the_same_empty_string_version(
+        self, log_structured_mock
+    ):
         """We don't want the modifications of a default session to have an impact for other users"""
         container = _StorageContainer(disable_isolation_mode=False)
         id1, storage1 = container.get_storage("")
@@ -3566,13 +3572,15 @@ class TestStorageContainer(TestCase):
         container = _StorageContainer(disable_isolation_mode=False, max_sessions=2)
         # Create max sessions
         container.get_storage("session1")
-        container.get_storage("session2")
+        id_2, storage_2 = container.get_storage("session2")
         # Creating third session should trigger eviction
-        session_id, storage = container.get_storage("session3")
+        id_3, storage_3 = container.get_storage("session3")
         # Should have exactly max_sessions entries
         self.assertEqual(len(container.index_map), 2)
-        self.assertIsNotNone(session_id)
-        self.assertIsInstance(storage, InMemoryStorage)
+        self.assertIsNotNone(id_3)
+        self.assertIsInstance(storage_3, InMemoryStorage)
+        # id_2 and id_3 stored
+        self.assertEqual({id_2, id_3}, set(container.index_map))
 
     # Tests - bind_jwt_to_session_id
 
@@ -3622,9 +3630,9 @@ class TestStorageContainer(TestCase):
 
     def test_bind_jwt_to_session_id_max_sessions_eviction(self):
         """Test that max sessions limit triggers JWT eviction"""
-        container = _StorageContainer(disable_isolation_mode=False)
+        container = _StorageContainer(disable_isolation_mode=False, max_sessions=4)
         # Fill up to max sessions
-        for i in range(MAX_SESSIONS):
+        for i in range(4):
             container.jwt_to_session[f"jwt_{i}"] = f"session_{i}"
             container.jwt_to_session_order.append(f"jwt_{i}")
         # Bind new JWT should evict oldest
