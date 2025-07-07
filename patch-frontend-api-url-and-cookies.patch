@@ -1,0 +1,16 @@
+diff --git a/src/app/core/interceptors/api.interceptor.ts b/src/app/core/interceptors/api.interceptor.ts
+index c959b13..b8f311f 100644
+--- a/src/app/core/interceptors/api.interceptor.ts
++++ b/src/app/core/interceptors/api.interceptor.ts
+@@ -1,6 +1,10 @@
+ import { HttpInterceptorFn } from "@angular/common/http";
+ 
+ export const apiInterceptor: HttpInterceptorFn = (req, next) => {
+-  const apiReq = req.clone({ url: `https://api.realworld.io/api${req.url}` });
++  const apiReq = req.clone({
++    url: `https://api.realworld.build${req.url}`,
++    setHeaders: { 'Content-Type': 'application/json' },
++    withCredentials: true
++  });
+   return next(apiReq);
+ };

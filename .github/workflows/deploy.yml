@@ -32,11 +32,11 @@ jobs:
       - name: Setup Pages
         uses: actions/configure-pages@v4
 
-      - name: Quick and dirty backend location modification  # no var env for backend configuration
-        run: >
-          sed -i
-          's|https://api\.realworld\.io/api|https://api\.realworld\.build|g'
-          angular-realworld-example-app/src/app/core/interceptors/api.interceptor.ts
+      - name: Frontend patching  # no var env for backend configuration + withCrendentials for cross domain cookie
+        run: |
+          mv patch-frontend-api-url-and-cookies.patch angular-realworld-example-app
+          cd changular-realworld-example-app
+          git apply patch-frontend-api-url-and-cookies.patch
 
       - name: Build your site
         # TODO use `yarn install --frozen-lockfile` once angular-realworld-example-app is updated
