@@ -1,14 +1,38 @@
+diff --git a/src/app/app.config.ts b/src/app/app.config.ts
+index 10ff149..6d97951 100644
+--- a/src/app/app.config.ts
++++ b/src/app/app.config.ts
+@@ -3,7 +3,7 @@ import {
+   inject,
+   provideAppInitializer,
+ } from "@angular/core";
+-import { provideRouter } from "@angular/router";
++import { provideRouter, withHashLocation } from "@angular/router";
+ 
+ import { routes } from "./app.routes";
+ import { provideHttpClient, withInterceptors } from "@angular/common/http";
+@@ -20,7 +20,7 @@ export function initAuth(jwtService: JwtService, userService: UserService) {
+ 
+ export const appConfig: ApplicationConfig = {
+   providers: [
+-    provideRouter(routes),
++    provideRouter(routes, withHashLocation()),
+     provideHttpClient(
+       withInterceptors([apiInterceptor, tokenInterceptor, errorInterceptor]),
+     ),
 diff --git a/src/app/core/interceptors/api.interceptor.ts b/src/app/core/interceptors/api.interceptor.ts
-index c959b13..b8f311f 100644
+index c959b13..46032d3 100644
 --- a/src/app/core/interceptors/api.interceptor.ts
 +++ b/src/app/core/interceptors/api.interceptor.ts
-@@ -1,6 +1,8 @@
+@@ -1,6 +1,10 @@
  import { HttpInterceptorFn } from "@angular/common/http";
  
  export const apiInterceptor: HttpInterceptorFn = (req, next) => {
 -  const apiReq = req.clone({ url: `https://api.realworld.io/api${req.url}` });
 +  const apiReq = req.clone({
 +    url: `https://api.realworld.build${req.url}`,
++    // setHeaders: { 'Content-Type': 'application/json' },
++    // withCredentials: true
 +  });
    return next(apiReq);
  };
