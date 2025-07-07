@@ -77,9 +77,7 @@ DISABLE_ISOLATION_MODE = getenv("DISABLE_ISOLATION_MODE", "FALSE").lower() == "t
 MAX_SESSIONS = int(getenv("MAX_SESSIONS") or 3000)
 MAX_SESSIONS_PER_IP = int(getenv("MAX_SESSIONS_PER_IP") or 30)
 BYPASS_ORIGIN_CHECK = getenv("BYPASS_ORIGIN_CHECK", "FALSE").lower() == "true"
-ALLOWED_ORIGINS = getenv("ALLOWED_ORIGINS", "").split(";")
-if ALLOWED_ORIGINS == [""] and not BYPASS_ORIGIN_CHECK:
-    raise ValueError("ALLOWED_ORIGINS varenv should be set if BYPASS_ORIGIN_CHECK isn't")
+ALLOWED_ORIGINS_FOR_DEMO_SESSION_COOKIE = getenv("ALLOWED_ORIGINS_FOR_DEMO_SESSION_COOKIE", "").split(";")
 # client ip detection
 CLIENT_IP_HEADER = getenv("CLIENT_IP_HEADER")  # Optional header name for client IP detection
 # logging
@@ -1406,7 +1404,7 @@ class RealWorldHandler(BaseHTTPRequestHandler):
                 security_logger, logging.DEBUG, "CSRF protection bypassed", ip=client_ip, origin=origin, bypass=True
             )
             return True
-        if origin in ALLOWED_ORIGINS:
+        if origin in ALLOWED_ORIGINS_FOR_DEMO_SESSION_COOKIE:
             log_structured(security_logger, logging.DEBUG, "CSRF protection passed", ip=client_ip, origin=origin)
             return True
         log_structured(
@@ -1415,7 +1413,7 @@ class RealWorldHandler(BaseHTTPRequestHandler):
             "CSRF protection failed",
             ip=client_ip,
             origin=origin,
-            allowed_origins=ALLOWED_ORIGINS,
+            allowed_origins_for_demo_session_cookie=ALLOWED_ORIGINS_FOR_DEMO_SESSION_COOKIE,
         )
         return False
 
