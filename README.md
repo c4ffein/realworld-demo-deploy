@@ -12,6 +12,15 @@
 
 ---
 
+**Complete account isolation**
+
+- You can create temporary accounts using any username or email (duplicates are allowed)
+- Each account operates in complete isolation, displaying only:
+  - The original base dataset
+  - Modifications made within that specific account
+
+Changes made by other accounts are never visible to you
+
 ### Why this implementation
 This approach addresses specific requirements:
 - **User isolation**: The API ensures users only see their own posts, solving moderation issues from the previous demo
