@@ -31,6 +31,7 @@ This approach addresses specific requirements:
 ### How to run
 ```bash
 # Set environment variables
+export PATH_PREFIX=/api  # path starts with /api/
 export POPULATE_DEMO_DATA=True  # includes mocked data for the demo
 export CLIENT_IP_HEADER=X-Forwarded-For  # use `X-Forwarded-For` to define the ip address of the client
 export LOG_FILE=log_files/json_lines.log  # location of the log file (will be rotated)

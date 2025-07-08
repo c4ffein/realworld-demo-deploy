@@ -72,6 +72,9 @@ from urllib.parse import parse_qs, urlparse
 #### CONFIGURATION #####################################################################################################
 
 
+# url prefix
+PATH_PREFIX = getenv("PATH_PREFIX", "")
+PATH_PREFIX_PARTS = PATH_PREFIX.strip("/").split("/")
 # security
 DISABLE_ISOLATION_MODE = getenv("DISABLE_ISOLATION_MODE", "FALSE").lower() == "true"
 MAX_SESSIONS = int(getenv("MAX_SESSIONS") or 3000)
@@ -1260,6 +1263,11 @@ class RealWorldHandler(BaseHTTPRequestHandler):
             ip=client_ip,
             user_id=current_user_id,
         )
+        if PATH_PREFIX_PARTS:
+            if not path_parts[: len(PATH_PREFIX_PARTS)] == PATH_PREFIX_PARTS:
+                self._send_error(404, {"errors": {"body": ["Not found"]}})
+                return
+            path_parts = path_parts[len(PATH_PREFIX_PARTS) :]
         # Route to handlers
         if method == "POST" and path_parts == ["users"]:
             self._handle_register(storage, target_session_id)

@@ -30,7 +30,7 @@ index c959b13..46032d3 100644
  export const apiInterceptor: HttpInterceptorFn = (req, next) => {
 -  const apiReq = req.clone({ url: `https://api.realworld.io/api${req.url}` });
 +  const apiReq = req.clone({
-+    url: `https://api.realworld.build${req.url}`,
++    url: `https://api.realworld.build/api${req.url}`,
 +    // setHeaders: { 'Content-Type': 'application/json' },
 +    // withCredentials: true
 +  });
