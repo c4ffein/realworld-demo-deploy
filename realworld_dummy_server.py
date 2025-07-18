@@ -1233,7 +1233,7 @@ class RealWorldHandler(BaseHTTPRequestHandler):
                 method=method,
                 path=getattr(self, "_request_path", None),
                 exception_type=str(exc),
-                exception_trace=format_tb(exc.__traceback__)
+                exception_trace=format_tb(exc.__traceback__),
             )
             self._send_error(500, {"errors": {"body": ["Internal Server Error"]}})
 
