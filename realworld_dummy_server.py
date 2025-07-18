@@ -63,6 +63,7 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 from os import getenv
 from pathlib import Path
 from time import time_ns
+from traceback import format_tb
 from typing import Dict, List, Optional, Tuple
 from unittest import TestCase
 from unittest.mock import patch
@@ -1199,31 +1200,19 @@ class RealWorldHandler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         """Handle GET requests"""
-        try:
-            self._handle_request("GET")
-        except Exception as e:
-            self._send_error(500, {"errors": {"body": [str(e)]}})
+        self._handle_request_with_all_exceptions_handled("GET")
 
     def do_POST(self):
         """Handle POST requests"""
-        try:
-            self._handle_request("POST")
-        except Exception as e:
-            self._send_error(500, {"errors": {"body": [str(e)]}})
+        self._handle_request_with_all_exceptions_handled("POST")
 
     def do_PUT(self):
         """Handle PUT requests"""
-        try:
-            self._handle_request("PUT")
-        except Exception as e:
-            self._send_error(500, {"errors": {"body": [str(e)]}})
+        self._handle_request_with_all_exceptions_handled("PUT")
 
     def do_DELETE(self):
         """Handle DELETE requests"""
-        try:
-            self._handle_request("DELETE")
-        except Exception as e:
-            self._send_error(500, {"errors": {"body": [str(e)]}})
+        self._handle_request_with_all_exceptions_handled("DELETE")
 
     def _get_client_ip(self):
         """Get client IP address from header (if configured) or socket connection"""
@@ -1232,6 +1221,21 @@ class RealWorldHandler(BaseHTTPRequestHandler):
             if header_value:
                 return header_value.split(",")[0].strip()  # comma-separated IPs (X-Forwarded-For format) - use first
         return self.request.getpeername()[0]  # fall back to socket connection IP
+
+    def _handle_request_with_all_exceptions_handled(self, method: str):
+        try:
+            return self._handle_request(method)
+        except Exception as exc:
+            log_structured(
+                http_logger,
+                logging.ERROR,
+                "Internal Server Error",
+                method = method,
+                path = getattr(self, "_request_path", None),
+                exception_type = str(exc),
+                exception_trace = format_tb(exc.__traceback__)
+            )
+            self._send_error(500, {"errors": {"body": ["Internal Server Error"]}})
 
     def _handle_request(self, method: str):
         """Route request to appropriate handler"""
