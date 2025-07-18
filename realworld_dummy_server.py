@@ -1230,10 +1230,10 @@ class RealWorldHandler(BaseHTTPRequestHandler):
                 http_logger,
                 logging.ERROR,
                 "Internal Server Error",
-                method = method,
-                path = getattr(self, "_request_path", None),
-                exception_type = str(exc),
-                exception_trace = format_tb(exc.__traceback__)
+                method=method,
+                path=getattr(self, "_request_path", None),
+                exception_type=str(exc),
+                exception_trace=format_tb(exc.__traceback__)
             )
             self._send_error(500, {"errors": {"body": ["Internal Server Error"]}})
 
