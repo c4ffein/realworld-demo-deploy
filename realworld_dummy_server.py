@@ -1369,24 +1369,22 @@ class RealWorldHandler(BaseHTTPRequestHandler):
             self.send_header("Set-Cookie", f"UNDOCUMENTED_DEMO_SESSION={demo_session_id}; Path=/")
         self.end_headers()
         response_body = json.dumps(data, indent=2)
-        self.wfile.write(response_body.encode("utf-8"))
-
-        # Log response with timing if available
-        if start_time and method and path:
-            duration_ms = (time_ns() - start_time) / 1_000_000  # Convert to milliseconds
-            client_ip = self._get_client_ip()
-            response_size = len(response_body.encode("utf-8"))
-            log_structured(
-                http_logger,
-                logging.INFO,
-                "Request completed",
-                method=method,
-                path=path,
-                status_code=status_code,
-                duration_ms=duration_ms,
-                response_size=response_size,
-                ip=client_ip,
-            )
+        response_body_bytes = response_body.encode("utf-8")
+        self.wfile.write(response_body_bytes)
+        duration_ms = (time_ns() - start_time) / 1_000_000 if start_time else None  # Convert to milliseconds
+        client_ip = self._get_client_ip()
+        response_size = len(response_body_bytes)
+        log_structured(
+            http_logger,
+            logging.INFO,
+            "Request completed",
+            method=method,
+            path=path,
+            status_code=status_code,
+            duration_ms=duration_ms,
+            response_size=response_size,
+            ip=client_ip,
+        )
 
     def _send_error(
         self, status_code: int, error_data: Dict, start_time: int = None, method: str = None, path: str = None
