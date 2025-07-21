@@ -1198,6 +1198,26 @@ def create_comment_response(comment: Dict, storage: InMemoryStorage, current_use
 class RealWorldHandler(BaseHTTPRequestHandler):
     """HTTP request handler for RealWorld API"""
 
+    @staticmethod
+    def _require_auth(func):
+        """Require authentication, only executes the wrapped method if current_user_id is not None, else returns 401"""
+
+        def wrapper(self, *args, **kwargs):
+            if self.current_user_id is None:
+                client_ip = self._get_client_ip()
+                log_structured(
+                    security_logger,
+                    logging.WARNING,
+                    "Authentication required but not provided",
+                    ip=client_ip,
+                    auth_required=True,
+                )
+                self._send_error(401, {"errors": {"body": ["Unauthorized"]}})
+                return
+            return func(self, *args, **kwargs)
+
+        return wrapper
+
     def do_GET(self):
         """Handle GET requests"""
         self._handle_request_with_all_exceptions_handled("GET")
@@ -1256,7 +1276,7 @@ class RealWorldHandler(BaseHTTPRequestHandler):
         # Remove leading slash and split path
         path_parts = path.strip("/").split("/")
         # Get authorization header
-        current_user_id = verify_token(token, storage, client_ip) if token else None
+        self.current_user_id = verify_token(token, storage, client_ip) if token else None
         # Log request start
         log_structured(
             http_logger,
@@ -1265,7 +1285,7 @@ class RealWorldHandler(BaseHTTPRequestHandler):
             method=method,
             path=path,
             ip=client_ip,
-            user_id=current_user_id,
+            user_id=self.current_user_id,
         )
         if PATH_PREFIX_PARTS:
             if not path_parts[: len(PATH_PREFIX_PARTS)] == PATH_PREFIX_PARTS:
@@ -1278,41 +1298,41 @@ class RealWorldHandler(BaseHTTPRequestHandler):
         elif method == "POST" and path_parts == ["users", "login"]:
             self._handle_login(storage, target_session_id)
         elif method == "GET" and path_parts == ["user"]:
-            self._handle_get_current_user(storage, current_user_id)
+            self._handle_get_current_user(storage)
         elif method == "PUT" and path_parts == ["user"]:
-            self._handle_update_user(storage, current_user_id)
+            self._handle_update_user(storage)
         elif method == "GET" and path_parts[0] == "profiles" and len(path_parts) == 2:
-            self._handle_get_profile(storage, path_parts[1], current_user_id)
+            self._handle_get_profile(storage, path_parts[1])
         elif method == "POST" and len(path_parts) == 3 and path_parts[0] == "profiles" and path_parts[2] == "follow":
-            self._handle_follow_user(storage, path_parts[1], current_user_id)
+            self._handle_follow_user(storage, path_parts[1])
         elif method == "DELETE" and len(path_parts) == 3 and path_parts[0] == "profiles" and path_parts[2] == "follow":
-            self._handle_unfollow_user(storage, path_parts[1], current_user_id)
+            self._handle_unfollow_user(storage, path_parts[1])
         elif method == "GET" and path_parts == ["articles"]:
-            self._handle_list_articles(storage, query_params, current_user_id)
+            self._handle_list_articles(storage, query_params)
         elif method == "GET" and path_parts == ["articles", "feed"]:
-            self._handle_articles_feed(storage, query_params, current_user_id)
+            self._handle_articles_feed(storage, query_params)
         elif method == "POST" and path_parts == ["articles"]:
-            self._handle_create_article(storage, current_user_id)
+            self._handle_create_article(storage)
         elif method == "GET" and len(path_parts) == 2 and path_parts[0] == "articles":
-            self._handle_get_article(storage, path_parts[1], current_user_id)
+            self._handle_get_article(storage, path_parts[1])
         elif method == "PUT" and len(path_parts) == 2 and path_parts[0] == "articles":
-            self._handle_update_article(storage, path_parts[1], current_user_id)
+            self._handle_update_article(storage, path_parts[1])
         elif method == "DELETE" and len(path_parts) == 2 and path_parts[0] == "articles":
-            self._handle_delete_article(storage, path_parts[1], current_user_id)
+            self._handle_delete_article(storage, path_parts[1])
         elif method == "POST" and len(path_parts) == 3 and path_parts[0] == "articles" and path_parts[2] == "favorite":
-            self._handle_favorite_article(storage, path_parts[1], current_user_id)
+            self._handle_favorite_article(storage, path_parts[1])
         elif (
             method == "DELETE" and len(path_parts) == 3 and path_parts[0] == "articles" and path_parts[2] == "favorite"
         ):
-            self._handle_unfavorite_article(storage, path_parts[1], current_user_id)
+            self._handle_unfavorite_article(storage, path_parts[1])
         elif method == "GET" and len(path_parts) == 3 and path_parts[0] == "articles" and path_parts[2] == "comments":
-            self._handle_get_comments(storage, path_parts[1], current_user_id)
+            self._handle_get_comments(storage, path_parts[1])
         elif method == "POST" and len(path_parts) == 3 and path_parts[0] == "articles" and path_parts[2] == "comments":
-            self._handle_create_comment(storage, path_parts[1], current_user_id)
+            self._handle_create_comment(storage, path_parts[1])
         elif (
             method == "DELETE" and len(path_parts) == 4 and path_parts[0] == "articles" and path_parts[2] == "comments"
         ):
-            self._handle_delete_comment(storage, path_parts[1], int(path_parts[3]), current_user_id)
+            self._handle_delete_comment(storage, path_parts[1], int(path_parts[3]))
         elif method == "GET" and path_parts == ["tags"]:
             self._handle_get_tags(storage)
         else:
@@ -1430,21 +1450,6 @@ class RealWorldHandler(BaseHTTPRequestHandler):
         )
         return False
 
-    def _require_auth(self, current_user_id: Optional[int]) -> int:
-        """Require authentication, return user_id or raise error"""
-        if current_user_id is None:
-            client_ip = self._get_client_ip()
-            log_structured(
-                security_logger,
-                logging.WARNING,
-                "Authentication required but not provided",
-                ip=client_ip,
-                auth_required=True,
-            )
-            self._send_error(401, {"errors": {"body": ["Unauthorized"]}})
-            raise Exception("Unauthorized")
-        return current_user_id
-
     # Auth endpoints
 
     def _handle_register(self, storage: InMemoryStorage, demo_session_id: str):
@@ -1559,10 +1564,10 @@ class RealWorldHandler(BaseHTTPRequestHandler):
 
         self._send_response_with_timing(200, {"user": create_user_response(user)}, demo_session_id)
 
-    def _handle_get_current_user(self, storage: InMemoryStorage, current_user_id: Optional[int]):
+    @_require_auth
+    def _handle_get_current_user(self, storage: InMemoryStorage):
         """GET /user - Get current user"""
-        user_id = self._require_auth(current_user_id)
-        user = storage.users.get(user_id)
+        user = storage.users.get(self.current_user_id)
         self._send_response(200, {"user": create_user_response(user)})
 
     def _helper_update_user_field(self, source_dict, target_dict, name, max_len):
@@ -1576,9 +1581,9 @@ class RealWorldHandler(BaseHTTPRequestHandler):
         target_dict[name] = source_dict[name]
         return False
 
-    def _handle_update_user(self, storage: InMemoryStorage, current_user_id: Optional[int]):
+    @_require_auth
+    def _handle_update_user(self, storage: InMemoryStorage):
         """PUT /user - Update current user"""
-        user_id = self._require_auth(current_user_id)
         data = self._get_request_body()
         user_data = data.get("user", {})
         user_update = {}
@@ -1592,32 +1597,31 @@ class RealWorldHandler(BaseHTTPRequestHandler):
             return
         if "password" in user_update:
             user_update["password"] = hash_password(user_update["password"])
-        user = storage.users.get(user_id)
+        user = storage.users.get(self.current_user_id)
         user.update(**user_update)
         self._send_response(200, {"user": create_user_response(user)})
 
     # Profile endpoints
 
-    def _handle_get_profile(self, storage: InMemoryStorage, username: str, current_user_id: Optional[int]):
+    def _handle_get_profile(self, storage: InMemoryStorage, username: str):
         """GET /profiles/{username} - Get profile"""
         user = get_user_by_username(username, storage)
         if not user:
             self._send_error(404, {"errors": {"body": ["Profile not found"]}})
             return
-        self._send_response(200, {"profile": create_profile_response(user, storage, current_user_id)})
+        self._send_response(200, {"profile": create_profile_response(user, storage, self.current_user_id)})
 
-    def _handle_follow_user(self, storage: InMemoryStorage, username: str, current_user_id: Optional[int]):
+    @_require_auth
+    def _handle_follow_user(self, storage: InMemoryStorage, username: str):
         """POST /profiles/{username}/follow - Follow user"""
-        user_id = self._require_auth(current_user_id)
         target_user = get_user_by_username(username, storage)
         if not target_user:
             self._send_error(404, {"errors": {"body": ["Profile not found"]}})
             return
-        if target_user["id"] == user_id:
+        if target_user["id"] == self.current_user_id:
             self._send_error(422, {"errors": {"body": ["Cannot follow yourself"]}})
             return
-        storage.follows.add(user_id, target_user["id"])
-
+        storage.follows.add(self.current_user_id, target_user["id"])
         # Log successful follow operation
         client_ip = self._get_client_ip()
         log_structured(
@@ -1626,22 +1630,23 @@ class RealWorldHandler(BaseHTTPRequestHandler):
             "User followed",
             "CRUD",
             operation="follow_user",
-            follower_id=user_id,
+            follower_id=self.current_user_id,
             followed_username=username,
             followed_id=target_user["id"],
             ip=client_ip,
         )
+        self._send_response_with_timing(
+            200, {"profile": create_profile_response(target_user, storage, self.current_user_id)}
+        )
 
-        self._send_response_with_timing(200, {"profile": create_profile_response(target_user, storage, user_id)})
-
-    def _handle_unfollow_user(self, storage: InMemoryStorage, username: str, current_user_id: Optional[int]):
+    @_require_auth
+    def _handle_unfollow_user(self, storage: InMemoryStorage, username: str):
         """DELETE /profiles/{username}/follow - Unfollow user"""
-        user_id = self._require_auth(current_user_id)
         target_user = get_user_by_username(username, storage)
         if not target_user:
             self._send_error(404, {"errors": {"body": ["Profile not found"]}})
             return
-        storage.follows.remove(user_id, target_user["id"])
+        storage.follows.remove(self.current_user_id, target_user["id"])
 
         # Log successful unfollow operation
         client_ip = self._get_client_ip()
@@ -1651,17 +1656,18 @@ class RealWorldHandler(BaseHTTPRequestHandler):
             "User unfollowed",
             "CRUD",
             operation="unfollow_user",
-            follower_id=user_id,
+            follower_id=self.current_user_id,
             unfollowed_username=username,
             unfollowed_id=target_user["id"],
             ip=client_ip,
         )
-
-        self._send_response_with_timing(200, {"profile": create_profile_response(target_user, storage, user_id)})
+        self._send_response_with_timing(
+            200, {"profile": create_profile_response(target_user, storage, self.current_user_id)}
+        )
 
     # Article endpoints
 
-    def _handle_list_articles(self, storage: InMemoryStorage, query_params: Dict, current_user_id: Optional[int]):
+    def _handle_list_articles(self, storage: InMemoryStorage, query_params: Dict):
         """GET /articles - List articles"""
         tag = query_params.get("tag", [None])[0]
         author = query_params.get("author", [None])[0]
@@ -1690,15 +1696,15 @@ class RealWorldHandler(BaseHTTPRequestHandler):
         total_count = len(articles)
         articles = articles[offset : offset + limit]
         # Format response
-        article_responses = [create_article_response(a, storage, current_user_id) for a in articles]
+        article_responses = [create_article_response(a, storage, self.current_user_id) for a in articles]
         self._send_response(200, {"articles": article_responses, "articlesCount": total_count})
 
-    def _handle_articles_feed(self, storage: InMemoryStorage, query_params: Dict, current_user_id: Optional[str]):
+    @_require_auth
+    def _handle_articles_feed(self, storage: InMemoryStorage, query_params: Dict):
         """GET /articles/feed - Get feed of followed users"""
-        user_id = self._require_auth(current_user_id)
         limit = int(query_params.get("limit", [20])[0])
         offset = int(query_params.get("offset", [0])[0])
-        followed_user_ids = storage.follows.targets_for_source(user_id)
+        followed_user_ids = storage.follows.targets_for_source(self.current_user_id)
         articles = [a for a in storage.articles.values() if a["author_id"] in followed_user_ids]
         # Sort by creation date (newest first)
         articles.sort(key=lambda x: x["createdAt"], reverse=True)
@@ -1706,7 +1712,7 @@ class RealWorldHandler(BaseHTTPRequestHandler):
         total_count = len(articles)
         articles = articles[offset : offset + limit]
         # Format response
-        article_responses = [create_article_response(a, storage, current_user_id) for a in articles]
+        article_responses = [create_article_response(a, storage, self.current_user_id) for a in articles]
         self._send_response(200, {"articles": article_responses, "articlesCount": total_count})
 
     def _helper_article_get_slug(self, storage, title):
@@ -1729,9 +1735,9 @@ class RealWorldHandler(BaseHTTPRequestHandler):
             return True
         return False
 
-    def _handle_create_article(self, storage: InMemoryStorage, current_user_id: Optional[str]):
+    @_require_auth
+    def _handle_create_article(self, storage: InMemoryStorage):
         """POST /articles - Create article"""
-        user_id = self._require_auth(current_user_id)
         data = self._get_request_body()
         article_data = data.get("article", {})
         title = article_data.get("title")
@@ -1766,12 +1772,11 @@ class RealWorldHandler(BaseHTTPRequestHandler):
             "description": description,
             "body": body,
             "tagList": sorted(tag_list),
-            "author_id": user_id,
+            "author_id": self.current_user_id,
             "createdAt": current_time,
             "updatedAt": current_time,
         }
         storage.articles.add(article)
-
         # Log successful article creation
         client_ip = self._get_client_ip()
         log_structured(
@@ -1782,29 +1787,30 @@ class RealWorldHandler(BaseHTTPRequestHandler):
             operation="create_article",
             slug=article["slug"],
             title=article["title"],
-            author_id=user_id,
+            author_id=self.current_user_id,
             article_id=article["id"],
             ip=client_ip,
         )
+        self._send_response_with_timing(
+            201, {"article": create_article_response(article, storage, self.current_user_id)}
+        )
 
-        self._send_response_with_timing(201, {"article": create_article_response(article, storage, user_id)})
-
-    def _handle_get_article(self, storage: InMemoryStorage, slug: str, current_user_id: Optional[str]):
+    def _handle_get_article(self, storage: InMemoryStorage, slug: str):
         """GET /articles/{slug} - Get article"""
         article = get_article_by_slug(slug, storage)
         if not article:
             self._send_error(404, {"errors": {"body": ["Article not found"]}})
             return
-        self._send_response(200, {"article": create_article_response(article, storage, current_user_id)})
+        self._send_response(200, {"article": create_article_response(article, storage, self.current_user_id)})
 
-    def _handle_update_article(self, storage: InMemoryStorage, slug: str, current_user_id: Optional[str]):
+    @_require_auth
+    def _handle_update_article(self, storage: InMemoryStorage, slug: str):
         """PUT /articles/{slug} - Update article"""
-        user_id = self._require_auth(current_user_id)
         article = get_article_by_slug(slug, storage)
         if not article:
             self._send_error(404, {"errors": {"body": ["Article not found"]}})
             return
-        if article["author_id"] != user_id:
+        if article["author_id"] != self.current_user_id:
             self._send_error(403, {"errors": {"body": ["Forbidden"]}})
             return
         data = self._get_request_body()
@@ -1826,7 +1832,6 @@ class RealWorldHandler(BaseHTTPRequestHandler):
             article_update["body"] = article_data["body"]
         article_update["updatedAt"] = get_current_time()
         article.update(**article_update)
-
         # Log successful article update
         client_ip = self._get_client_ip()
         updated_fields = list(article_update.keys())
@@ -1838,21 +1843,22 @@ class RealWorldHandler(BaseHTTPRequestHandler):
             operation="update_article",
             slug=slug,
             updated_fields=updated_fields,
-            author_id=user_id,
+            author_id=self.current_user_id,
             article_id=article["id"],
             ip=client_ip,
         )
+        self._send_response_with_timing(
+            200, {"article": create_article_response(article, storage, self.current_user_id)}
+        )
 
-        self._send_response_with_timing(200, {"article": create_article_response(article, storage, user_id)})
-
-    def _handle_delete_article(self, storage: InMemoryStorage, slug: str, current_user_id: Optional[str]):
+    @_require_auth
+    def _handle_delete_article(self, storage: InMemoryStorage, slug: str):
         """DELETE /articles/{slug} - Delete article"""
-        user_id = self._require_auth(current_user_id)
         article = get_article_by_slug(slug, storage)
         if not article:
             self._send_error(404, {"errors": {"body": ["Article not found"]}})
             return
-        if article["author_id"] != user_id:
+        if article["author_id"] != self.current_user_id:
             self._send_error(403, {"errors": {"body": ["Forbidden"]}})
             return
         # Delete article and related data
@@ -1864,7 +1870,6 @@ class RealWorldHandler(BaseHTTPRequestHandler):
         comments_to_delete = [c_id for c_id, c in storage.comments.items() if c["article_id"] == article_id]
         for c_id in comments_to_delete:
             storage.comments.delete(c_id)
-
         # Log successful article deletion
         client_ip = self._get_client_ip()
         log_structured(
@@ -1875,7 +1880,7 @@ class RealWorldHandler(BaseHTTPRequestHandler):
             operation="delete_article",
             slug=slug,
             article_id=article_id,
-            author_id=user_id,
+            author_id=self.current_user_id,
             deleted_comments_count=len(comments_to_delete),
             ip=client_ip,
         )
@@ -1887,29 +1892,29 @@ class RealWorldHandler(BaseHTTPRequestHandler):
         self.send_header("Access-Control-Allow-Headers", "Content-Type, Authorization")
         self.end_headers()
 
-    def _handle_favorite_article(self, storage: InMemoryStorage, slug: str, current_user_id: Optional[str]):
+    @_require_auth
+    def _handle_favorite_article(self, storage: InMemoryStorage, slug: str):
         """POST /articles/{slug}/favorite - Favorite article"""
-        user_id = self._require_auth(current_user_id)
         article = get_article_by_slug(slug, storage)
         if not article:
             self._send_error(404, {"errors": {"body": ["Article not found"]}})
             return
-        storage.favorites.add(user_id, article["id"])
-        self._send_response(200, {"article": create_article_response(article, storage, user_id)})
+        storage.favorites.add(self.current_user_id, article["id"])
+        self._send_response(200, {"article": create_article_response(article, storage, self.current_user_id)})
 
-    def _handle_unfavorite_article(self, storage: InMemoryStorage, slug: str, current_user_id: Optional[str]):
+    @_require_auth
+    def _handle_unfavorite_article(self, storage: InMemoryStorage, slug: str):
         """DELETE /articles/{slug}/favorite - Unfavorite article"""
-        user_id = self._require_auth(current_user_id)
         article = get_article_by_slug(slug, storage)
         if not article:
             self._send_error(404, {"errors": {"body": ["Article not found"]}})
             return
-        storage.favorites.remove(user_id, article["id"])
-        self._send_response(200, {"article": create_article_response(article, storage, user_id)})
+        storage.favorites.remove(self.current_user_id, article["id"])
+        self._send_response(200, {"article": create_article_response(article, storage, self.current_user_id)})
 
     # Comment endpoints
 
-    def _handle_get_comments(self, storage: InMemoryStorage, slug: str, current_user_id: Optional[str]):
+    def _handle_get_comments(self, storage: InMemoryStorage, slug: str):
         """GET /articles/{slug}/comments - Get comments"""
         article = get_article_by_slug(slug, storage)
         if not article:
@@ -1917,12 +1922,12 @@ class RealWorldHandler(BaseHTTPRequestHandler):
             return
         comments = [c for c in storage.comments.values() if c["article_id"] == article["id"]]
         comments.sort(key=lambda x: x["createdAt"], reverse=True)
-        comment_responses = [create_comment_response(c, storage, current_user_id) for c in comments]
+        comment_responses = [create_comment_response(c, storage, self.current_user_id) for c in comments]
         self._send_response(200, {"comments": comment_responses})
 
-    def _handle_create_comment(self, storage: InMemoryStorage, slug: str, current_user_id: Optional[str]):
+    @_require_auth
+    def _handle_create_comment(self, storage: InMemoryStorage, slug: str):
         """POST /articles/{slug}/comments - Create comment"""
-        user_id = self._require_auth(current_user_id)
         article = get_article_by_slug(slug, storage)
         if not article:
             self._send_error(404, {"errors": {"body": ["Article not found"]}})
@@ -1941,12 +1946,11 @@ class RealWorldHandler(BaseHTTPRequestHandler):
         comment = {
             "body": body,
             "article_id": article["id"],
-            "author_id": user_id,
+            "author_id": self.current_user_id,
             "createdAt": current_time,
             "updatedAt": current_time,
         }
         storage.comments.add(comment)
-
         # Log successful comment creation
         client_ip = self._get_client_ip()
         log_structured(
@@ -1957,18 +1961,17 @@ class RealWorldHandler(BaseHTTPRequestHandler):
             operation="create_comment",
             comment_id=comment["id"],
             slug=slug,
-            author_id=user_id,
+            author_id=self.current_user_id,
             article_id=article["id"],
             ip=client_ip,
         )
+        self._send_response_with_timing(
+            200, {"comment": create_comment_response(comment, storage, self.current_user_id)}
+        )
 
-        self._send_response_with_timing(200, {"comment": create_comment_response(comment, storage, user_id)})
-
-    def _handle_delete_comment(
-        self, storage: InMemoryStorage, slug: str, comment_id: int, current_user_id: Optional[str]
-    ):
+    @_require_auth
+    def _handle_delete_comment(self, storage: InMemoryStorage, slug: str, comment_id: int):
         """DELETE /articles/{slug}/comments/{id} - Delete comment"""
-        user_id = self._require_auth(current_user_id)
         article = get_article_by_slug(slug, storage)
         if not article:
             self._send_error(404, {"errors": {"body": ["Article not found"]}})
@@ -1978,7 +1981,7 @@ class RealWorldHandler(BaseHTTPRequestHandler):
             self._send_error(404, {"errors": {"body": ["Comment not found"]}})
             return
         # Only comment author or article author can delete
-        if comment["author_id"] != user_id and article["author_id"] != user_id:
+        if comment["author_id"] != self.current_user_id and article["author_id"] != self.current_user_id:
             self._send_error(403, {"errors": {"body": ["Forbidden"]}})
             return
         storage.comments.delete(comment_id)
@@ -1993,7 +1996,7 @@ class RealWorldHandler(BaseHTTPRequestHandler):
             operation="delete_comment",
             comment_id=comment_id,
             slug=slug,
-            deleted_by_user_id=user_id,
+            deleted_by_user_id=self.current_user_id,
             article_id=article["id"],
             ip=client_ip,
         )
