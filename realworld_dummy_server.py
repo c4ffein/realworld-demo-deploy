@@ -56,8 +56,6 @@ import logging.handlers
 import re
 import time
 import uuid
-from collections import defaultdict
-from copy import deepcopy
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from os import getenv
@@ -383,9 +381,9 @@ def populate_demo_data(storage: "InMemoryStorage"):
 
 
 def normalize_id(value):
-    if type(value) == int:
+    if type(value) is int:
         value = str(value)
-    if type(value) == str:
+    if type(value) is str:
         if len(value) > MAX_ID_LEN:
             raise ValueError("id is too long")
         return value
@@ -808,11 +806,13 @@ class _StorageContainer:
         )
         self.heap[self.index_map[session_id]][4] = normalized_client_ip  # update the client_ip in the data struct
         saved_ip_removed = False
+        saved_ip_sessions_before, saved_ip_sessions_after = None, None
         if normalized_saved_ip and normalized_saved_ip in self.ip_to_sessions:
-            sessions_before = len(self.ip_to_sessions[normalized_saved_ip])
+            saved_ip_sessions_before = len(self.ip_to_sessions[normalized_saved_ip])
             self.ip_to_sessions[normalized_saved_ip] = [
                 e for e in self.ip_to_sessions[normalized_saved_ip] if e != session_id
             ]
+            saved_ip_sessions_after = len(self.ip_to_sessions[normalized_saved_ip])
             if not self.ip_to_sessions[normalized_saved_ip]:  # Remove empty lists
                 del self.ip_to_sessions[normalized_saved_ip]
                 saved_ip_removed = True
@@ -836,6 +836,8 @@ class _StorageContainer:
             normalized_saved_ip=normalized_saved_ip,
             normalized_client_ip=normalized_client_ip,
             saved_ip_removed=saved_ip_removed,
+            saved_ip_sessions_before=saved_ip_sessions_before,
+            saved_ip_sessions_after=saved_ip_sessions_after,
             client_ip_sessions_before=client_ip_sessions_before,
             client_ip_sessions_after=len(self.ip_to_sessions[normalized_client_ip]),
             sessions_removed=sessions_removed,
@@ -1477,7 +1479,9 @@ class RealWorldHandler(BaseHTTPRequestHandler):
             return
 
         max_lens = ((email, MAX_LEN_USER_EMAIL), (username, MAX_LEN_USER_USERNAME), (password, MAX_LEN_USER_PASSWORD))
-        if not all(type[d] == str for d in (email, username, password)) and not all(len(d) <= l for d, l in max_lens):
+        if not all(type[d] is str for d in (email, username, password)) and not all(
+            len(variable) <= max_allowed_length for variable, max_allowed_length in max_lens
+        ):
             err_str = "Email, username and password are expected as strings of length less than "
             err_str += f"{MAX_LEN_USER_EMAIL}, {MAX_LEN_USER_USERNAME}, and {MAX_LEN_USER_PASSWORD}, respectively"
             log_structured(
@@ -1576,7 +1580,7 @@ class RealWorldHandler(BaseHTTPRequestHandler):
         """returns True if there is an error"""
         if name not in source_dict:
             return False
-        if type(source_dict[name]) != str or len(source_dict[name]) > max_len:
+        if type(source_dict[name]) is not str or len(source_dict[name]) > max_len:
             err_str = f"{name} is an optional string of length <= {max_len}"
             self._send_error(422, {"errors": {"body": [err_str]}})
             return True
@@ -1731,7 +1735,7 @@ class RealWorldHandler(BaseHTTPRequestHandler):
         """returns True if there is an error"""
         if name not in source_dict:
             return False
-        if type(source_dict[name]) != str or len(source_dict[name]) > max_len:
+        if type(source_dict[name]) is not str or len(source_dict[name]) > max_len:
             err_str = f"{name} is an optional string of length <= {max_len}"
             self._send_error(422, {"errors": {"body": [err_str]}})
             return True
@@ -1756,9 +1760,9 @@ class RealWorldHandler(BaseHTTPRequestHandler):
             return
         tag_list = article_data.get("tagList", [])
         if (
-            type(tag_list) != list
+            type(tag_list) is not list
             or len(tag_list) > MAX_LEN_ARTICLE_TAG_LIST
-            or any(type(e) != str for e in tag_list)
+            or any(type(e) is not str for e in tag_list)
             or any(len(e) > MAX_LEN_ARTICLE_TAG_LEN for e in tag_list)
         ):
             err_str = f"tagList is an optional list of less than {MAX_LEN_ARTICLE_TAG_LIST} strings "
@@ -1823,7 +1827,7 @@ class RealWorldHandler(BaseHTTPRequestHandler):
             if self._helper_article_field(article_data, "title", MAX_LEN_ARTICLE_TITLE):
                 return
             article_update["title"] = article_data["title"]
-            article_update["slug"] = self._helper_article_get_slug(storage, title)  # checked different title before
+            article_update["slug"] = self._helper_article_get_slug(storage, article["title"])
         if "description" in article_data:
             if self._helper_article_field(article_data, "description", MAX_LEN_ARTICLE_DESCRIPTION):
                 return
@@ -1940,7 +1944,7 @@ class RealWorldHandler(BaseHTTPRequestHandler):
         if not body:
             self._send_error(422, {"errors": {"body": ["Body is required"]}})
             return
-        if type(body) != str or len(body) > MAX_LEN_COMMENT_BODY:
+        if type(body) is not str or len(body) > MAX_LEN_COMMENT_BODY:
             self._send_error(422, {"errors": {"body": [f"Body is a string of less than {MAX_LEN_COMMENT_BODY} chars"]}})
             return
         # Create comment
@@ -2135,7 +2139,7 @@ class TestInMemoryModel(TestCase):
 
     def test_negative_max_count(self):
         with self.assertRaises(ValueError) as exc:
-            model = InMemoryModel(max_count=-1)
+            InMemoryModel(max_count=-1)
         self.assertEqual(str(exc.exception), "invalid value for max_count")
 
     # add
@@ -2351,7 +2355,7 @@ class TestInMemoryModel(TestCase):
 
     def test_model_zero_max_count(self):
         with self.assertRaises(ValueError) as exc:
-            model = InMemoryModel(max_count=0)
+            InMemoryModel(max_count=0)
         self.assertEqual(str(exc.exception), "invalid value for max_count")
 
     @patch("realworld_dummy_server.log_structured")
@@ -3900,7 +3904,7 @@ class TestSaveAndLoadData(TestCase):
         comment1_data = {"body": "Great article! Very informative.", "author": user2["id"], "article": article1["id"]}
         comment2_data = {"body": "I disagree but gg.", "author": user1["id"], "article": article1["id"]}
         comment1 = storage1.comments.add(comment1_data)
-        comment2 = storage1.comments.add(comment2_data)
+        storage1.comments.add(comment2_data)
         storage1.comments.get(comment1["id"])  # reorders data
         # Add follows and favorites to storage1
         storage1.follows.add(user1["id"], user2["id"])  # user1 follows user2
@@ -3935,7 +3939,7 @@ class TestSaveAndLoadData(TestCase):
         article3 = storage2.articles.add(article3_data)
         # Add comments and links to storage2
         comment3_data = {"body": "Comment from session 2", "author": user4["id"], "article": article3["id"]}
-        comment3 = storage2.comments.add(comment3_data)
+        storage2.comments.add(comment3_data)
         storage2.follows.add(user3["id"], user4["id"])
         storage2.favorites.add(user4["id"], article3["id"])
         # Populate storage3 with even more data
@@ -3986,9 +3990,9 @@ class TestSaveAndLoadData(TestCase):
         comment4_data = {"body": "First comment in session 3", "author": user6["id"], "article": article4["id"]}
         comment5_data = {"body": "Second comment in session 3", "author": user7["id"], "article": article4["id"]}
         comment6_data = {"body": "Third comment in session 3", "author": user5["id"], "article": article5["id"]}
-        comment4 = storage3.comments.add(comment4_data)
-        comment5 = storage3.comments.add(comment5_data)
-        comment6 = storage3.comments.add(comment6_data)
+        storage3.comments.add(comment4_data)
+        storage3.comments.add(comment5_data)
+        storage3.comments.add(comment6_data)
         # Add complex follow/favorite relationships in storage3
         storage3.follows.add(user5["id"], user6["id"])  # user5 follows user6
         storage3.follows.add(user6["id"], user7["id"])  # user6 follows user7

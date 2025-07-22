@@ -43,4 +43,7 @@ submodules-fetch:
 # Lint
 
 lint:
-	uvx ruff format --line-length 120
+	uvx ruff check --fix; uvx ruff format --line-length 120
+
+lint-check:
+	uvx ruff check && uvx ruff format --line-length 120 --check
