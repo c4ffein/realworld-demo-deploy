@@ -25,6 +25,9 @@ jobs:
         npm install -g newman
     - name: Verify Newman installation
       run: newman --version
+    - name: Fetch Submodules
+      run: |
+        make submodules-fetch
     - name: Run Tests
       run: |
         make test-dummy-server-api-with-postman
