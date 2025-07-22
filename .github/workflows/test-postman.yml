@@ -12,6 +12,8 @@ jobs:
     timeout-minutes: 10
     steps:
     - uses: actions/checkout@v4
+      with:
+        submodules: true  # single-level submodules
     - name: Set up Python 3.12
       uses: actions/setup-python@v3
       with:
@@ -25,9 +27,6 @@ jobs:
         npm install -g newman
     - name: Verify Newman installation
       run: newman --version
-    - name: Fetch Submodules
-      run: |
-        make submodules-fetch
     - name: Run Tests
       run: |
         make test-dummy-server-api-with-postman
