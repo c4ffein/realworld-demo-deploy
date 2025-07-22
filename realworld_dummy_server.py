@@ -1260,6 +1260,8 @@ class RealWorldHandler(BaseHTTPRequestHandler):
     def _handle_request(self, method: str):
         """Route request to appropriate handler"""
         self._request_start_time = time_ns()
+        # Log request entry point
+        log_structured(http_logger, logging.INFO, "Request received")
         # Get base token
         # Get other request infos
         client_ip = self._get_client_ip()
@@ -1277,11 +1279,11 @@ class RealWorldHandler(BaseHTTPRequestHandler):
         path_parts = path.strip("/").split("/")
         # Get authorization header
         self.current_user_id = verify_token(token, storage, client_ip) if token else None
-        # Log request start
+        # Log request treatment start
         log_structured(
             http_logger,
             logging.INFO,
-            "Request started",
+            "Request treatment started",
             method=method,
             path=path,
             ip=client_ip,
