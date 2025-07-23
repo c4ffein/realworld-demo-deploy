@@ -129,7 +129,7 @@ POPULATE_DEMO_DATA = getenv("POPULATE_DEMO_DATA", "FALSE").lower() == "true"
 class JSONFormatter(logging.Formatter):
     def format(self, record):
         log_entry = {
-            "timestamp": self.formatTime(record, self.datefmt),
+            "timestamp": datetime.fromtimestamp(record.created).strftime("%Y-%m-%dT%H:%M:%S.%f"),
             "logger": record.name,
             "level": record.levelname,
             "category": (lambda v: f"{record.name}.{v}" if v is not None else record.name)(
@@ -149,7 +149,7 @@ def setup_logging():
     # Clear any existing handlers
     logger.handlers.clear()
     # Create formatter
-    formatter = JSONFormatter(datefmt="%Y-%m-%dT%H:%M:%S")
+    formatter = JSONFormatter()
     # Console handler
     console_handler = logging.StreamHandler()
     console_handler.setFormatter(formatter)
