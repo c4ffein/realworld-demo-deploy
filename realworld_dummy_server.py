@@ -123,6 +123,11 @@ NAIVE_SIZE_SESSION = NAIVE_SIZE_SESSION_USER + NAIVE_SIZE_SESSION_ARTICLE + NAIV
 NAIVE_SIZE_TOTAL = NAIVE_SIZE_SESSION * MAX_SESSIONS
 # populate demo data
 POPULATE_DEMO_DATA = getenv("POPULATE_DEMO_DATA", "FALSE").lower() == "true"
+DEMO_DATA_DEFAULT_IMAGE = getenv(
+    "DEMO_DATA_DEFAULT_IMAGE",
+    "https://upload.wikimedia.org/wikipedia/commons/thumb/8/8f/Cute-kittens-12929201-1600-1200.jpg"
+    "/960px-Cute-kittens-12929201-1600-1200.jpg",
+)
 
 
 #### LOGGING ###########################################################################################################
@@ -214,7 +219,7 @@ def populate_demo_data(storage: "InMemoryStorage"):
             "username": "johndoe",
             "password": hash_password("password123"),
             "bio": "Full-stack developer passionate about clean code and innovative solutions. Love working with modern web technologies.",
-            "image": "https://api.realworld.io/images/smiley-cyrus.jpeg",
+            "image": DEMO_DATA_DEFAULT_IMAGE,
             "createdAt": current_time,
         },
         {
@@ -222,7 +227,7 @@ def populate_demo_data(storage: "InMemoryStorage"):
             "username": "janesmith",
             "password": hash_password("password123"),
             "bio": "Frontend developer with a keen eye for UI/UX design. Specializing in React and modern CSS frameworks.",
-            "image": "https://api.realworld.io/images/smiley-cyrus.jpeg",
+            "image": DEMO_DATA_DEFAULT_IMAGE,
             "createdAt": current_time,
         },
         {
@@ -230,7 +235,7 @@ def populate_demo_data(storage: "InMemoryStorage"):
             "username": "mikewilson",
             "password": hash_password("password123"),
             "bio": "Backend engineer focused on scalable architecture and DevOps. Enthusiast of cloud technologies and automation.",
-            "image": "https://api.realworld.io/images/smiley-cyrus.jpeg",
+            "image": DEMO_DATA_DEFAULT_IMAGE,
             "createdAt": current_time,
         },
         {
@@ -238,7 +243,7 @@ def populate_demo_data(storage: "InMemoryStorage"):
             "username": "sarahchen",
             "password": hash_password("password123"),
             "bio": "Data scientist and machine learning engineer. Passionate about turning data into actionable insights.",
-            "image": "https://api.realworld.io/images/smiley-cyrus.jpeg",
+            "image": DEMO_DATA_DEFAULT_IMAGE,
             "createdAt": current_time,
         },
     ]
@@ -1142,7 +1147,7 @@ def create_user_response(user: Dict, include_token: bool = True) -> Dict:
         "username": user["username"],
         "email": user["email"],
         "bio": user.get("bio", ""),
-        "image": user.get("image", "https://api.realworld.io/images/smiley-cyrus.jpeg"),
+        "image": user.get("image", DEMO_DATA_DEFAULT_IMAGE),
     }
     if include_token:
         response["token"] = user.get("token", "")
@@ -1158,7 +1163,7 @@ def create_profile_response(user: Dict, storage: InMemoryStorage, current_user_i
     return {
         "username": user["username"],
         "bio": user.get("bio", ""),
-        "image": user.get("image", "https://api.realworld.io/images/smiley-cyrus.jpeg"),
+        "image": user.get("image", DEMO_DATA_DEFAULT_IMAGE),
         "following": following,
     }
 
@@ -1545,7 +1550,7 @@ class RealWorldHandler:
             "username": username,
             "password": hash_password(password),
             "bio": "",
-            "image": "https://api.realworld.io/images/smiley-cyrus.jpeg",
+            "image": DEMO_DATA_DEFAULT_IMAGE,
             "createdAt": get_current_time(),
         }
         # Add user and get the auto-assigned ID
