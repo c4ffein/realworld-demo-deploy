@@ -25,7 +25,7 @@ test-dummy-server-api-with-postman:
 	PATH_PREFIX=api BYPASS_ORIGIN_CHECK=True DISABLE_ISOLATION_MODE=True python realworld_dummy_server.py & \
 	SERVER_PID=$$!; \
 	trap "kill $$SERVER_PID 2>/dev/null || true" EXIT; \
-	sleep 0.3; \
+	sleep 0.4; \
 	kill -0 "$$SERVER_PID" 2>/dev/null || exit 4; \
 	make test-dummy-server-api-with-postman-and-already-launched-server; \
 	kill $$SERVER_PID 2>/dev/null || true
