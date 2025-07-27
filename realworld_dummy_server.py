@@ -54,10 +54,11 @@ import json
 import logging
 import logging.handlers
 import re
+import sys
 import time
 import uuid
 from datetime import datetime, timezone
-from http.server import BaseHTTPRequestHandler, HTTPServer
+from urllib.parse import parse_qs
 from os import getenv
 from pathlib import Path
 from time import time_ns
@@ -65,8 +66,9 @@ from traceback import format_tb
 from typing import Dict, List, Optional, Tuple
 from unittest import TestCase
 from unittest.mock import patch
-from urllib.parse import parse_qs, urlparse
 
+sys.path.insert(0, "./waitress/src")
+from waitress import serve
 
 #### CONFIGURATION #####################################################################################################
 
@@ -1197,8 +1199,67 @@ def create_comment_response(comment: Dict, storage: InMemoryStorage, current_use
     }
 
 
-class RealWorldHandler(BaseHTTPRequestHandler):
-    """HTTP request handler for RealWorld API"""
+class RealWorldHandler:
+    """WSGI application for RealWorld API"""
+
+    def __call__(self, environ, start_response):
+        """WSGI application entry point"""
+        try:
+            self.environ = environ
+            self.start_response = start_response
+            self._request_start_time = time_ns()
+
+            # Get request info
+            self._request_method = environ["REQUEST_METHOD"]
+            self._request_path = environ.get("PATH_INFO", "/")
+            self._query_string = environ.get("QUERY_STRING", "")
+            self._query_params = parse_qs(self._query_string) if self._query_string else {}
+            # Get client IP
+            client_ip = self._get_client_ip()
+            # Get auth header
+            auth_header = environ.get("HTTP_AUTHORIZATION", "")
+            token = auth_header.replace("Token ", "") if auth_header.startswith("Token ") else None
+            # Get demo session cookie from HTTP_COOKIE
+            demo_session_cookie = None
+            cookie_header = environ.get("HTTP_COOKIE", "")
+            if cookie_header:
+                for cookie in cookie_header.split(";"):
+                    if "=" in cookie:
+                        name, value = cookie.strip().split("=", 1)
+                        if name == "UNDOCUMENTED_DEMO_SESSION":
+                            demo_session_cookie = value
+                            break
+            # Get storage
+            self.target_session_id, self.storage = storage_container.get_storage(
+                demo_session_cookie if self._check_csrf_protection() else None, client_ip, token
+            )
+            # Set instance variables
+            self.current_user_id = verify_token(token, self.storage, client_ip) if token else None
+        except Exception as exc:
+            log_structured(
+                http_logger,
+                logging.ERROR,
+                "Internal Server Error",
+                method=getattr(self, "_request_method", None),
+                path=getattr(self, "_request_path", None),
+                exception_type=str(exc),
+                exception_traceback=format_tb(exc.__traceback__),
+            )
+            return self._send_error(500, "Internal Server Error")
+        # Route request
+        try:
+            return self._handle_request(self._request_method, self._request_path, self._query_params)
+        except Exception as exc:
+            log_structured(
+                http_logger,
+                logging.ERROR,
+                "Internal Server Error",
+                method=self._request_method,
+                path=self._request_path,
+                exception_type=str(exc),
+                exception_traceback=format_tb(exc.__traceback__),
+            )
+            return self._send_error(500, "Internal Server Error")
 
     @staticmethod
     def _require_auth(func):
@@ -1214,74 +1275,30 @@ class RealWorldHandler(BaseHTTPRequestHandler):
                     ip=client_ip,
                     auth_required=True,
                 )
-                self._send_error(401, {"errors": {"body": ["Unauthorized"]}})
-                return
+                return self._send_error(401, {"errors": {"body": ["Unauthorized"]}})
             return func(self, *args, **kwargs)
 
         return wrapper
 
-    def do_GET(self):
-        """Handle GET requests"""
-        self._handle_request_with_all_exceptions_handled("GET")
-
-    def do_POST(self):
-        """Handle POST requests"""
-        self._handle_request_with_all_exceptions_handled("POST")
-
-    def do_PUT(self):
-        """Handle PUT requests"""
-        self._handle_request_with_all_exceptions_handled("PUT")
-
-    def do_DELETE(self):
-        """Handle DELETE requests"""
-        self._handle_request_with_all_exceptions_handled("DELETE")
-
     def _get_client_ip(self):
-        """Get client IP address from header (if configured) or socket connection"""
-        if CLIENT_IP_HEADER:  # use configured header for client IP (useful when behind reverse proxy)
-            header_value = self.headers.get(CLIENT_IP_HEADER)
+        """Get client IP address from header (if configured) or environ"""
+        if CLIENT_IP_HEADER:
+            header_key = f"HTTP_{CLIENT_IP_HEADER.upper().replace('-', '_')}"
+            header_value = self.environ.get(header_key)
             if header_value:
-                return header_value.split(",")[0].strip()  # comma-separated IPs (X-Forwarded-For format) - use first
-        return self.request.getpeername()[0]  # fall back to socket connection IP
+                return header_value.split(",")[0].strip()
+        return self.environ.get("REMOTE_ADDR", "127.0.0.1")
 
-    def _handle_request_with_all_exceptions_handled(self, method: str):
-        try:
-            return self._handle_request(method)
-        except Exception as exc:
-            log_structured(
-                http_logger,
-                logging.ERROR,
-                "Internal Server Error",
-                method=method,
-                path=getattr(self, "_request_path", None),
-                exception_type=str(exc),
-                exception_trace=format_tb(exc.__traceback__),
-            )
-            self._send_error(500, {"errors": {"body": ["Internal Server Error"]}})
-
-    def _handle_request(self, method: str):
+    def _handle_request(self, method: str, path: str, query_params: dict):
         """Route request to appropriate handler"""
-        self._request_start_time = time_ns()
         # Log request entry point
         log_structured(http_logger, logging.INFO, "Request received")
-        # Get base token
-        # Get other request infos
-        client_ip = self._get_client_ip()
-        parsed = urlparse(self.path)
-        path = parsed.path
-        self._request_method = method
-        self._request_path = path
-        auth_header = self.headers.get("Authorization", "")
-        token = auth_header.replace("Token ", "") if auth_header.startswith("Token ") else None
-        target_session_id, storage = storage_container.get_storage(
-            self._get_demo_session_cookie() if self._check_csrf_protection() else None, client_ip, token
-        )
-        query_params = parse_qs(parsed.query)
+
         # Remove leading slash and split path
         path_parts = path.strip("/").split("/")
-        # Get authorization header
-        self.current_user_id = verify_token(token, storage, client_ip) if token else None
+
         # Log request treatment start
+        client_ip = self._get_client_ip()
         log_structured(
             http_logger,
             logging.INFO,
@@ -1293,64 +1310,75 @@ class RealWorldHandler(BaseHTTPRequestHandler):
         )
         if PATH_PREFIX_PARTS:
             if not path_parts[: len(PATH_PREFIX_PARTS)] == PATH_PREFIX_PARTS:
-                self._send_error(404, {"errors": {"body": ["Not found"]}})
-                return
+                return self._send_error(404, {"errors": {"body": ["Not found"]}})
             path_parts = path_parts[len(PATH_PREFIX_PARTS) :]
         # Route to handlers
         if method == "POST" and path_parts == ["users"]:
-            self._handle_register(storage, target_session_id)
+            return self._handle_register(self.storage, self.target_session_id)
         elif method == "POST" and path_parts == ["users", "login"]:
-            self._handle_login(storage, target_session_id)
+            return self._handle_login(self.storage, self.target_session_id)
         elif method == "GET" and path_parts == ["user"]:
-            self._handle_get_current_user(storage)
+            return self._handle_get_current_user(self.storage)
         elif method == "PUT" and path_parts == ["user"]:
-            self._handle_update_user(storage)
+            return self._handle_update_user(self.storage)
         elif method == "GET" and path_parts[0] == "profiles" and len(path_parts) == 2:
-            self._handle_get_profile(storage, path_parts[1])
+            return self._handle_get_profile(self.storage, path_parts[1])
         elif method == "POST" and len(path_parts) == 3 and path_parts[0] == "profiles" and path_parts[2] == "follow":
-            self._handle_follow_user(storage, path_parts[1])
+            return self._handle_follow_user(self.storage, path_parts[1])
         elif method == "DELETE" and len(path_parts) == 3 and path_parts[0] == "profiles" and path_parts[2] == "follow":
-            self._handle_unfollow_user(storage, path_parts[1])
+            return self._handle_unfollow_user(self.storage, path_parts[1])
         elif method == "GET" and path_parts == ["articles"]:
-            self._handle_list_articles(storage, query_params)
+            return self._handle_list_articles(self.storage, query_params)
         elif method == "GET" and path_parts == ["articles", "feed"]:
-            self._handle_articles_feed(storage, query_params)
+            return self._handle_articles_feed(self.storage, query_params)
         elif method == "POST" and path_parts == ["articles"]:
-            self._handle_create_article(storage)
+            return self._handle_create_article(self.storage)
         elif method == "GET" and len(path_parts) == 2 and path_parts[0] == "articles":
-            self._handle_get_article(storage, path_parts[1])
+            return self._handle_get_article(self.storage, path_parts[1])
         elif method == "PUT" and len(path_parts) == 2 and path_parts[0] == "articles":
-            self._handle_update_article(storage, path_parts[1])
+            return self._handle_update_article(self.storage, path_parts[1])
         elif method == "DELETE" and len(path_parts) == 2 and path_parts[0] == "articles":
-            self._handle_delete_article(storage, path_parts[1])
+            return self._handle_delete_article(self.storage, path_parts[1])
         elif method == "POST" and len(path_parts) == 3 and path_parts[0] == "articles" and path_parts[2] == "favorite":
-            self._handle_favorite_article(storage, path_parts[1])
+            return self._handle_favorite_article(self.storage, path_parts[1])
         elif (
             method == "DELETE" and len(path_parts) == 3 and path_parts[0] == "articles" and path_parts[2] == "favorite"
         ):
-            self._handle_unfavorite_article(storage, path_parts[1])
+            return self._handle_unfavorite_article(self.storage, path_parts[1])
         elif method == "GET" and len(path_parts) == 3 and path_parts[0] == "articles" and path_parts[2] == "comments":
-            self._handle_get_comments(storage, path_parts[1])
+            return self._handle_get_comments(self.storage, path_parts[1])
         elif method == "POST" and len(path_parts) == 3 and path_parts[0] == "articles" and path_parts[2] == "comments":
-            self._handle_create_comment(storage, path_parts[1])
+            return self._handle_create_comment(self.storage, path_parts[1])
         elif (
             method == "DELETE" and len(path_parts) == 4 and path_parts[0] == "articles" and path_parts[2] == "comments"
         ):
-            self._handle_delete_comment(storage, path_parts[1], int(path_parts[3]))
+            return self._handle_delete_comment(self.storage, path_parts[1], int(path_parts[3]))
         elif method == "GET" and path_parts == ["tags"]:
-            self._handle_get_tags(storage)
+            return self._handle_get_tags(self.storage)
+        elif method == "OPTIONS":
+            return self._handle_options()
         else:
-            self._send_error(404, {"errors": {"body": ["Not found"]}})
+            return self._send_error(404, {"errors": {"body": ["Not found"]}})
+
+    def _handle_options(self):
+        """Handle OPTIONS requests for CORS"""
+        headers = [
+            ("Access-Control-Allow-Origin", "*"),
+            ("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS"),
+            ("Access-Control-Allow-Headers", "Content-Type, Authorization"),
+        ]
+        self.start_response("200 OK", headers)
+        return [b""]
 
     def _get_request_body(self) -> Dict:
         """Parse JSON request body"""
-        content_length = int(self.headers.get("Content-Length", 0))
+        content_length = int(self.environ.get("CONTENT_LENGTH", 0))
         if content_length == 0:
             log_structured(
                 http_logger, logging.DEBUG, "Request body: empty (no content-length)", payload_size=0, has_body=False
             )
             return {}
-        body = self.rfile.read(content_length).decode("utf-8")
+        body = self.environ["wsgi.input"].read(content_length).decode("utf-8")
         parsed_body = json.loads(body) if body else {}
 
         # Log detailed request payload at debug level
@@ -1377,25 +1405,34 @@ class RealWorldHandler(BaseHTTPRequestHandler):
     def _send_response(
         self,
         status_code: int,
-        data: Dict,
+        data: Optional[Dict],
         demo_session_id: Optional[str] = None,
         start_time: int = None,
         method: str = None,
         path: str = None,
     ):
         """Send JSON response"""
-        self.send_response(status_code)
-        self.send_header("Content-Type", "application/json")
-        self.send_header("Access-Control-Allow-Origin", "*")
-        self.send_header("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
-        self.send_header("Access-Control-Allow-Headers", "Content-Type, Authorization")
+        if data is not None:
+            response_body = json.dumps(data, indent=2)
+            response_body_bytes = response_body.encode("utf-8")
+        else:
+            response_body, response_body_bytes = None, b""
+        # Prepare headers
+        headers = [
+            ("Content-Type", "application/json"),
+            ("Access-Control-Allow-Origin", "*"),
+            ("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS"),
+            ("Access-Control-Allow-Headers", "Content-Type, Authorization"),
+        ]
         if demo_session_id:
-            self.send_header("Set-Cookie", f"UNDOCUMENTED_DEMO_SESSION={demo_session_id}; Path=/")
-        self.end_headers()
-        response_body = json.dumps(data, indent=2)
-        response_body_bytes = response_body.encode("utf-8")
-        self.wfile.write(response_body_bytes)
-        duration_ms = (time_ns() - start_time) / 1_000_000 if start_time else None  # Convert to milliseconds
+            headers.append(("Set-Cookie", f"UNDOCUMENTED_DEMO_SESSION={demo_session_id}; Path=/"))
+        # Send response
+        status_reason = {200: "OK", 201: "Created", 204: "No Content", 400: "Bad Request", 404: "Not Found"}.get(
+            status_code, "Error"
+        )
+        status_text = f"{status_code} {status_reason}"
+        # Log response
+        duration_ms = (time_ns() - start_time) / 1_000_000 if start_time else None
         client_ip = self._get_client_ip()
         response_size = len(response_body_bytes)
         log_structured(
@@ -1409,6 +1446,8 @@ class RealWorldHandler(BaseHTTPRequestHandler):
             response_size=response_size,
             ip=client_ip,
         )
+        self.start_response(status_text, headers)
+        return [response_body_bytes] if response_body_bytes else []
 
     def _send_error(
         self, status_code: int, error_data: Dict, start_time: int = None, method: str = None, path: str = None
@@ -1418,18 +1457,18 @@ class RealWorldHandler(BaseHTTPRequestHandler):
         start_time = start_time or getattr(self, "_request_start_time", None)
         method = method or getattr(self, "_request_method", None)
         path = path or getattr(self, "_request_path", None)
-        self._send_response(status_code, error_data, None, start_time, method, path)
+        return self._send_response(status_code, error_data, None, start_time, method, path)
 
     def _send_response_with_timing(self, status_code: int, data: Dict, demo_session_id: Optional[uuid.UUID] = None):
         """Send response with automatic timing from stored request data"""
         start_time = getattr(self, "_request_start_time", None)
         method = getattr(self, "_request_method", None)
         path = getattr(self, "_request_path", None)
-        self._send_response(status_code, data, demo_session_id, start_time, method, path)
+        return self._send_response(status_code, data, demo_session_id, start_time, method, path)
 
     def _check_csrf_protection(self) -> bool:
         """Check CSRF protection using Origin header for non-GET requests"""
-        origin = self.headers.get("Origin")
+        origin = self.environ.get("HTTP_ORIGIN")
         client_ip = self._get_client_ip()
         if self._request_method == "GET":
             log_structured(
@@ -1463,9 +1502,7 @@ class RealWorldHandler(BaseHTTPRequestHandler):
         email = user_data.get("email")
         username = user_data.get("username")
         password = user_data.get("password")
-
         client_ip = self._get_client_ip()
-
         if not all([email, username, password]):
             log_structured(
                 auth_logger,
@@ -1475,9 +1512,7 @@ class RealWorldHandler(BaseHTTPRequestHandler):
                 email=email,
                 username=username,
             )
-            self._send_error(422, {"errors": {"body": ["Email, username and password are required"]}})
-            return
-
+            return self._send_error(422, {"errors": {"body": ["Email, username and password are required"]}})
         max_lens = ((email, MAX_LEN_USER_EMAIL), (username, MAX_LEN_USER_USERNAME), (password, MAX_LEN_USER_PASSWORD))
         if not all(type[d] is str for d in (email, username, password)) and not all(
             len(variable) <= max_allowed_length for variable, max_allowed_length in max_lens
@@ -1492,9 +1527,7 @@ class RealWorldHandler(BaseHTTPRequestHandler):
                 email=email,
                 username=username,
             )
-            self._send_error(422, {"errors": {"body": [err_str]}})
-            return
-
+            return self._send_error(422, {"errors": {"body": [err_str]}})
         # Check if user already exists
         if get_user_by_email(email, storage) or get_user_by_username(username, storage):
             log_structured(
@@ -1505,9 +1538,7 @@ class RealWorldHandler(BaseHTTPRequestHandler):
                 email=email,
                 username=username,
             )
-            self._send_error(409, {"errors": {"body": ["User already exists"]}})
-            return
-
+            return self._send_error(409, {"errors": {"body": ["User already exists"]}})
         # Create new user
         user = {
             "email": email,
@@ -1533,8 +1564,7 @@ class RealWorldHandler(BaseHTTPRequestHandler):
             username=username,
             user_id=user_id,
         )
-
-        self._send_response_with_timing(201, {"user": create_user_response(user)}, demo_session_id)
+        return self._send_response_with_timing(201, {"user": create_user_response(user)}, demo_session_id)
 
     def _handle_login(self, storage: InMemoryStorage, demo_session_id: str):
         """POST /users/login - Login user"""
@@ -1542,20 +1572,14 @@ class RealWorldHandler(BaseHTTPRequestHandler):
         user_data = data.get("user", {})
         email = user_data.get("email")
         password = user_data.get("password")
-
         client_ip = self._get_client_ip()
-
         if not all([email, password]):
             log_structured(auth_logger, logging.WARNING, "Login failed: missing fields", ip=client_ip, email=email)
-            self._send_error(422, {"errors": {"body": ["Email and password are required"]}})
-            return
-
+            return self._send_error(422, {"errors": {"body": ["Email and password are required"]}})
         user = get_user_by_email(email, storage)
         if not user or user["password"] != hash_password(password):
             log_structured(auth_logger, logging.WARNING, "Login failed: invalid credentials", ip=client_ip, email=email)
-            self._send_error(401, {"errors": {"body": ["Invalid credentials"]}})
-            return
-
+            return self._send_error(401, {"errors": {"body": ["Invalid credentials"]}})
         user["token"] = generate_token(user["id"])  # Generate new token
         storage_container.bind_jwt_to_session_id(user["token"], demo_session_id)
         log_structured(
@@ -1567,25 +1591,23 @@ class RealWorldHandler(BaseHTTPRequestHandler):
             username=user.get("username"),
             user_id=user["id"],
         )
-
-        self._send_response_with_timing(200, {"user": create_user_response(user)}, demo_session_id)
+        return self._send_response_with_timing(200, {"user": create_user_response(user)}, demo_session_id)
 
     @_require_auth
     def _handle_get_current_user(self, storage: InMemoryStorage):
         """GET /user - Get current user"""
         user = storage.users.get(self.current_user_id)
-        self._send_response(200, {"user": create_user_response(user)})
+        return self._send_response(200, {"user": create_user_response(user)})
 
     def _helper_update_user_field(self, source_dict, target_dict, name, max_len):
-        """returns True if there is an error"""
+        """returns response if there is an error, None otherwise"""
         if name not in source_dict:
-            return False
+            return None
         if type(source_dict[name]) is not str or len(source_dict[name]) > max_len:
             err_str = f"{name} is an optional string of length <= {max_len}"
-            self._send_error(422, {"errors": {"body": [err_str]}})
-            return True
+            return self._send_error(422, {"errors": {"body": [err_str]}})
         target_dict[name] = source_dict[name]
-        return False
+        return None
 
     @_require_auth
     def _handle_update_user(self, storage: InMemoryStorage):
@@ -1594,18 +1616,19 @@ class RealWorldHandler(BaseHTTPRequestHandler):
         user_data = data.get("user", {})
         user_update = {}
         # Update fields if provided
-        if (
+        error_response = (
             self._helper_update_user_field(user_data, user_update, "username", MAX_LEN_USER_USERNAME)
             or self._helper_update_user_field(user_data, user_update, "password", MAX_LEN_USER_PASSWORD)
             or self._helper_update_user_field(user_data, user_update, "bio", MAX_LEN_USER_BIO)
             or self._helper_update_user_field(user_data, user_update, "image", MAX_LEN_USER_IMAGE)
-        ):
-            return
+        )
+        if error_response:
+            return error_response
         if "password" in user_update:
             user_update["password"] = hash_password(user_update["password"])
         user = storage.users.get(self.current_user_id)
         user.update(**user_update)
-        self._send_response(200, {"user": create_user_response(user)})
+        return self._send_response(200, {"user": create_user_response(user)})
 
     # Profile endpoints
 
@@ -1613,20 +1636,17 @@ class RealWorldHandler(BaseHTTPRequestHandler):
         """GET /profiles/{username} - Get profile"""
         user = get_user_by_username(username, storage)
         if not user:
-            self._send_error(404, {"errors": {"body": ["Profile not found"]}})
-            return
-        self._send_response(200, {"profile": create_profile_response(user, storage, self.current_user_id)})
+            return self._send_error(404, {"errors": {"body": ["Profile not found"]}})
+        return self._send_response(200, {"profile": create_profile_response(user, storage, self.current_user_id)})
 
     @_require_auth
     def _handle_follow_user(self, storage: InMemoryStorage, username: str):
         """POST /profiles/{username}/follow - Follow user"""
         target_user = get_user_by_username(username, storage)
         if not target_user:
-            self._send_error(404, {"errors": {"body": ["Profile not found"]}})
-            return
+            return self._send_error(404, {"errors": {"body": ["Profile not found"]}})
         if target_user["id"] == self.current_user_id:
-            self._send_error(422, {"errors": {"body": ["Cannot follow yourself"]}})
-            return
+            return self._send_error(422, {"errors": {"body": ["Cannot follow yourself"]}})
         storage.follows.add(self.current_user_id, target_user["id"])
         # Log successful follow operation
         client_ip = self._get_client_ip()
@@ -1641,7 +1661,7 @@ class RealWorldHandler(BaseHTTPRequestHandler):
             followed_id=target_user["id"],
             ip=client_ip,
         )
-        self._send_response_with_timing(
+        return self._send_response_with_timing(
             200, {"profile": create_profile_response(target_user, storage, self.current_user_id)}
         )
 
@@ -1650,10 +1670,8 @@ class RealWorldHandler(BaseHTTPRequestHandler):
         """DELETE /profiles/{username}/follow - Unfollow user"""
         target_user = get_user_by_username(username, storage)
         if not target_user:
-            self._send_error(404, {"errors": {"body": ["Profile not found"]}})
-            return
+            return self._send_error(404, {"errors": {"body": ["Profile not found"]}})
         storage.follows.remove(self.current_user_id, target_user["id"])
-
         # Log successful unfollow operation
         client_ip = self._get_client_ip()
         log_structured(
@@ -1667,7 +1685,7 @@ class RealWorldHandler(BaseHTTPRequestHandler):
             unfollowed_id=target_user["id"],
             ip=client_ip,
         )
-        self._send_response_with_timing(
+        return self._send_response_with_timing(
             200, {"profile": create_profile_response(target_user, storage, self.current_user_id)}
         )
 
@@ -1703,7 +1721,7 @@ class RealWorldHandler(BaseHTTPRequestHandler):
         articles = articles[offset : offset + limit]
         # Format response
         article_responses = [create_article_response(a, storage, self.current_user_id) for a in articles]
-        self._send_response(200, {"articles": article_responses, "articlesCount": total_count})
+        return self._send_response(200, {"articles": article_responses, "articlesCount": total_count})
 
     @_require_auth
     def _handle_articles_feed(self, storage: InMemoryStorage, query_params: Dict):
@@ -1719,7 +1737,7 @@ class RealWorldHandler(BaseHTTPRequestHandler):
         articles = articles[offset : offset + limit]
         # Format response
         article_responses = [create_article_response(a, storage, self.current_user_id) for a in articles]
-        self._send_response(200, {"articles": article_responses, "articlesCount": total_count})
+        return self._send_response(200, {"articles": article_responses, "articlesCount": total_count})
 
     def _helper_article_get_slug(self, storage, title):
         """ensure slug is unique"""
@@ -1732,14 +1750,13 @@ class RealWorldHandler(BaseHTTPRequestHandler):
         return slug
 
     def _helper_article_field(self, source_dict, name, max_len):
-        """returns True if there is an error"""
+        """returns response if there is an error, None otherwise"""
         if name not in source_dict:
-            return False
+            return None
         if type(source_dict[name]) is not str or len(source_dict[name]) > max_len:
             err_str = f"{name} is an optional string of length <= {max_len}"
-            self._send_error(422, {"errors": {"body": [err_str]}})
-            return True
-        return False
+            return self._send_error(422, {"errors": {"body": [err_str]}})
+        return None
 
     @_require_auth
     def _handle_create_article(self, storage: InMemoryStorage):
@@ -1750,14 +1767,14 @@ class RealWorldHandler(BaseHTTPRequestHandler):
         description = article_data.get("description")
         body = article_data.get("body")
         if not all([title, description, body]):
-            self._send_error(422, {"errors": {"body": ["Title, description and body are required"]}})
-            return
-        if (
+            return self._send_error(422, {"errors": {"body": ["Title, description and body are required"]}})
+        error_response = (
             self._helper_article_field(article_data, "title", MAX_LEN_ARTICLE_TITLE)
             or self._helper_article_field(article_data, "description", MAX_LEN_ARTICLE_DESCRIPTION)
             or self._helper_article_field(article_data, "body", MAX_LEN_ARTICLE_BODY)
-        ):
-            return
+        )
+        if error_response:
+            return error_response
         tag_list = article_data.get("tagList", [])
         if (
             type(tag_list) is not list
@@ -1767,8 +1784,7 @@ class RealWorldHandler(BaseHTTPRequestHandler):
         ):
             err_str = f"tagList is an optional list of less than {MAX_LEN_ARTICLE_TAG_LIST} strings "
             err_str += f"of less than {MAX_LEN_ARTICLE_TAG_LEN} chars"
-            self._send_error(422, {"errors": {"body": [err_str]}})
-            return True
+            return self._send_error(422, {"errors": {"body": [err_str]}})
         slug = self._helper_article_get_slug(storage, title)
         # Create article
         current_time = get_current_time()
@@ -1797,7 +1813,7 @@ class RealWorldHandler(BaseHTTPRequestHandler):
             article_id=article["id"],
             ip=client_ip,
         )
-        self._send_response_with_timing(
+        return self._send_response_with_timing(
             201, {"article": create_article_response(article, storage, self.current_user_id)}
         )
 
@@ -1805,36 +1821,33 @@ class RealWorldHandler(BaseHTTPRequestHandler):
         """GET /articles/{slug} - Get article"""
         article = get_article_by_slug(slug, storage)
         if not article:
-            self._send_error(404, {"errors": {"body": ["Article not found"]}})
-            return
-        self._send_response(200, {"article": create_article_response(article, storage, self.current_user_id)})
+            return self._send_error(404, {"errors": {"body": ["Article not found"]}})
+        return self._send_response(200, {"article": create_article_response(article, storage, self.current_user_id)})
 
     @_require_auth
     def _handle_update_article(self, storage: InMemoryStorage, slug: str):
         """PUT /articles/{slug} - Update article"""
         article = get_article_by_slug(slug, storage)
         if not article:
-            self._send_error(404, {"errors": {"body": ["Article not found"]}})
-            return
+            return self._send_error(404, {"errors": {"body": ["Article not found"]}})
         if article["author_id"] != self.current_user_id:
-            self._send_error(403, {"errors": {"body": ["Forbidden"]}})
-            return
+            return self._send_error(403, {"errors": {"body": ["Forbidden"]}})
         data = self._get_request_body()
         article_data = data.get("article", {})
         article_update = {}  # update this intermediary dict to prevent half-finished updates
         # Update fields if provided
         if "title" in article_data and article["title"] != article_data["title"]:  # additional check for slug
-            if self._helper_article_field(article_data, "title", MAX_LEN_ARTICLE_TITLE):
-                return
+            if error_response := self._helper_article_field(article_data, "title", MAX_LEN_ARTICLE_TITLE):
+                return error_response
             article_update["title"] = article_data["title"]
             article_update["slug"] = self._helper_article_get_slug(storage, article["title"])
         if "description" in article_data:
-            if self._helper_article_field(article_data, "description", MAX_LEN_ARTICLE_DESCRIPTION):
-                return
+            if error_response := self._helper_article_field(article_data, "description", MAX_LEN_ARTICLE_DESCRIPTION):
+                return error_response
             article_update["description"] = article_data["description"]
         if "body" in article_data:
-            if self._helper_article_field(article_data, "body", MAX_LEN_ARTICLE_BODY):
-                return
+            if error_response := self._helper_article_field(article_data, "body", MAX_LEN_ARTICLE_BODY):
+                return error_response
             article_update["body"] = article_data["body"]
         article_update["updatedAt"] = get_current_time()
         article.update(**article_update)
@@ -1853,7 +1866,7 @@ class RealWorldHandler(BaseHTTPRequestHandler):
             article_id=article["id"],
             ip=client_ip,
         )
-        self._send_response_with_timing(
+        return self._send_response_with_timing(
             200, {"article": create_article_response(article, storage, self.current_user_id)}
         )
 
@@ -1862,11 +1875,9 @@ class RealWorldHandler(BaseHTTPRequestHandler):
         """DELETE /articles/{slug} - Delete article"""
         article = get_article_by_slug(slug, storage)
         if not article:
-            self._send_error(404, {"errors": {"body": ["Article not found"]}})
-            return
+            return self._send_error(404, {"errors": {"body": ["Article not found"]}})
         if article["author_id"] != self.current_user_id:
-            self._send_error(403, {"errors": {"body": ["Forbidden"]}})
-            return
+            return self._send_error(403, {"errors": {"body": ["Forbidden"]}})
         # Delete article and related data
         article_id = article["id"]
         storage.articles.delete(article_id)
@@ -1890,33 +1901,26 @@ class RealWorldHandler(BaseHTTPRequestHandler):
             deleted_comments_count=len(comments_to_delete),
             ip=client_ip,
         )
-
         # Send 204 No Content
-        self.send_response(204)
-        self.send_header("Access-Control-Allow-Origin", "*")
-        self.send_header("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
-        self.send_header("Access-Control-Allow-Headers", "Content-Type, Authorization")
-        self.end_headers()
+        return self._send_response(204, None)
 
     @_require_auth
     def _handle_favorite_article(self, storage: InMemoryStorage, slug: str):
         """POST /articles/{slug}/favorite - Favorite article"""
         article = get_article_by_slug(slug, storage)
         if not article:
-            self._send_error(404, {"errors": {"body": ["Article not found"]}})
-            return
+            return self._send_error(404, {"errors": {"body": ["Article not found"]}})
         storage.favorites.add(self.current_user_id, article["id"])
-        self._send_response(200, {"article": create_article_response(article, storage, self.current_user_id)})
+        return self._send_response(200, {"article": create_article_response(article, storage, self.current_user_id)})
 
     @_require_auth
     def _handle_unfavorite_article(self, storage: InMemoryStorage, slug: str):
         """DELETE /articles/{slug}/favorite - Unfavorite article"""
         article = get_article_by_slug(slug, storage)
         if not article:
-            self._send_error(404, {"errors": {"body": ["Article not found"]}})
-            return
+            return self._send_error(404, {"errors": {"body": ["Article not found"]}})
         storage.favorites.remove(self.current_user_id, article["id"])
-        self._send_response(200, {"article": create_article_response(article, storage, self.current_user_id)})
+        return self._send_response(200, {"article": create_article_response(article, storage, self.current_user_id)})
 
     # Comment endpoints
 
@@ -1924,29 +1928,27 @@ class RealWorldHandler(BaseHTTPRequestHandler):
         """GET /articles/{slug}/comments - Get comments"""
         article = get_article_by_slug(slug, storage)
         if not article:
-            self._send_error(404, {"errors": {"body": ["Article not found"]}})
-            return
+            return self._send_error(404, {"errors": {"body": ["Article not found"]}})
         comments = [c for c in storage.comments.values() if c["article_id"] == article["id"]]
         comments.sort(key=lambda x: x["createdAt"], reverse=True)
         comment_responses = [create_comment_response(c, storage, self.current_user_id) for c in comments]
-        self._send_response(200, {"comments": comment_responses})
+        return self._send_response(200, {"comments": comment_responses})
 
     @_require_auth
     def _handle_create_comment(self, storage: InMemoryStorage, slug: str):
         """POST /articles/{slug}/comments - Create comment"""
         article = get_article_by_slug(slug, storage)
         if not article:
-            self._send_error(404, {"errors": {"body": ["Article not found"]}})
-            return
+            return self._send_error(404, {"errors": {"body": ["Article not found"]}})
         data = self._get_request_body()
         comment_data = data.get("comment", {})
         body = comment_data.get("body")
         if not body:
-            self._send_error(422, {"errors": {"body": ["Body is required"]}})
-            return
+            return self._send_error(422, {"errors": {"body": ["Body is required"]}})
         if type(body) is not str or len(body) > MAX_LEN_COMMENT_BODY:
-            self._send_error(422, {"errors": {"body": [f"Body is a string of less than {MAX_LEN_COMMENT_BODY} chars"]}})
-            return
+            return self._send_error(
+                422, {"errors": {"body": [f"Body is a string of less than {MAX_LEN_COMMENT_BODY} chars"]}}
+            )
         # Create comment
         current_time = get_current_time()
         comment = {
@@ -1971,7 +1973,7 @@ class RealWorldHandler(BaseHTTPRequestHandler):
             article_id=article["id"],
             ip=client_ip,
         )
-        self._send_response_with_timing(
+        return self._send_response_with_timing(
             200, {"comment": create_comment_response(comment, storage, self.current_user_id)}
         )
 
@@ -1980,18 +1982,14 @@ class RealWorldHandler(BaseHTTPRequestHandler):
         """DELETE /articles/{slug}/comments/{id} - Delete comment"""
         article = get_article_by_slug(slug, storage)
         if not article:
-            self._send_error(404, {"errors": {"body": ["Article not found"]}})
-            return
+            return self._send_error(404, {"errors": {"body": ["Article not found"]}})
         comment = storage.comments.get(comment_id)
         if not comment or comment["article_id"] != article["id"]:
-            self._send_error(404, {"errors": {"body": ["Comment not found"]}})
-            return
+            return self._send_error(404, {"errors": {"body": ["Comment not found"]}})
         # Only comment author or article author can delete
         if comment["author_id"] != self.current_user_id and article["author_id"] != self.current_user_id:
-            self._send_error(403, {"errors": {"body": ["Forbidden"]}})
-            return
+            return self._send_error(403, {"errors": {"body": ["Forbidden"]}})
         storage.comments.delete(comment_id)
-
         # Log successful comment deletion
         client_ip = self._get_client_ip()
         log_structured(
@@ -2006,27 +2004,16 @@ class RealWorldHandler(BaseHTTPRequestHandler):
             article_id=article["id"],
             ip=client_ip,
         )
-
         # Send 204 No Content
-        self.send_response(204)
-        self.send_header("Access-Control-Allow-Origin", "*")
-        self.send_header("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
-        self.send_header("Access-Control-Allow-Headers", "Content-Type, Authorization")
-        self.end_headers()
+        return self._send_response(204, None)
 
     # Tag endpoints
 
     def _handle_get_tags(self, storage: InMemoryStorage):
         """GET /tags - Get all tags"""
-        self._send_response(200, {"tags": sorted({t for a in storage.articles.values() for t in a.get("tagList", [])})})
-
-    def do_OPTIONS(self):
-        """Handle OPTIONS requests for CORS"""
-        self.send_response(200)
-        self.send_header("Access-Control-Allow-Origin", "*")
-        self.send_header("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
-        self.send_header("Access-Control-Allow-Headers", "Content-Type, Authorization")
-        self.end_headers()
+        return self._send_response_with_timing(
+            200, {"tags": sorted({t for a in storage.articles.values() for t in a.get("tagList", [])})}
+        )
 
 
 def run_server(port: int = 8000):
@@ -2076,7 +2063,9 @@ def run_server(port: int = 8000):
         log_file=bool(LOG_FILE),
         log_file_path=LOG_FILE,
     )
-    httpd = HTTPServer(("", port), RealWorldHandler)  # ty: ignore[invalid-argument-type]
+    # Create WSGI application
+    app = RealWorldHandler()
+
     # Document routes - using print here
     print(f"RealWorld API Server running on http://localhost:{port}")
     print("API endpoints available:")
@@ -2100,13 +2089,11 @@ def run_server(port: int = 8000):
     print("  DELETE /articles/{slug}/comments/{id}  -- Delete comment")
     print("  GET    /tags  --------------------------- Get tags")
     print("\nPress Ctrl+C to stop the server")
-    # Serve until SIGINT
+    # Serve with waitress
     try:
-        httpd.serve_forever()
+        serve(app, host="0.0.0.0", port=port, threads=1)
     except KeyboardInterrupt:
         log_structured(lifecycle_logger, logging.INFO, "shutting down server")
-        httpd.shutdown()
-        log_structured(lifecycle_logger, logging.INFO, "httpd down")
         if DATA_FILE_PATH:
             log_structured(lifecycle_logger, logging.INFO, "trying to save data")
             did_save = save_data()
