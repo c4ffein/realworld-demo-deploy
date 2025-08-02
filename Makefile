@@ -1,3 +1,23 @@
+.PHONY: run-dummy-for-prod run-dummy-for-postman
+.PHONY: test-dummy-server-api-with-postman-and-already-launched-server test-dummy-server-api-with-postman
+.PHONY: test-dummy-server-unittest
+.PHONY: submodules-fetch
+.PHONY: lint lint-check
+
+########################
+# Help
+
+help:
+	@echo "Available commands:"
+	@echo "  run-dummy-for-prod"
+	@echo "  run-dummy-for-postman"
+	@echo "  test-dummy-server-api-with-postman-and-already-launched-server"
+	@echo "  test-dummy-server-api-with-postman"
+	@echo "  test-dummy-server-unittest"
+	@echo "  submodules-fetch"
+	@echo "  lint"
+	@echo "  lint-check"
+
 ########################
 # Run
 
