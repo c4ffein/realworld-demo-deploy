@@ -25,8 +25,7 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: '20'
-          cache: 'yarn'  # enable yarn cache
-          # TODO use yarn cache once angular-realworld-example-app is updated
+          cache: 'npm'  # enable npm cache
           cache-dependency-path: './angular-realworld-example-app/package-lock.json'
 
       - name: Setup Pages
@@ -39,11 +38,10 @@ jobs:
           git apply patch-frontend-api-url-and-cookies.patch
 
       - name: Build your site
-        # TODO use `yarn install --frozen-lockfile` once angular-realworld-example-app is updated
         run: |
           cd angular-realworld-example-app
-          yarn install
-          yarn ng build -- -c production
+          npm install --legacy-peer-deps
+          npm run ng build -- -c production
 
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v3
