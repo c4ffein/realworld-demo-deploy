@@ -3,7 +3,7 @@
 
 ---
 
-**[The demo is deployed on demo.realworld.build](https://demo.realworld.build/)**
+**[The demo is deployed on demo.realworld.show](https://demo.realworld.show/)**
 
 ---
 
