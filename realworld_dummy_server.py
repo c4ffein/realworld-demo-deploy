@@ -548,8 +548,6 @@ class InMemoryStorage:
         self.comments = InMemoryModel(max_count=MAX_COMMENTS_PER_SESSION)
         self.follows = InMemoryLinks(max_count=MAX_FOLLOWS_PER_SESSION)  # user_id -> followed user_ids
         self.favorites = InMemoryLinks(max_count=MAX_FAVORITES_PER_SESSION)  # user_id -> favorited article_ids
-        self.last_known_session = None  # str
-        self.last_known_jwt = None  # str
         if POPULATE_DEMO_DATA:
             populate_demo_data(self)
 
@@ -570,7 +568,7 @@ class _StorageContainer:
         self.MAX_SESSIONS = max_sessions
         self.heap = []  # list of (priority, obj_id, data, index, client_ip)
         self.index_map = {}  # session_id -> heap index
-        self.jwt_to_session = {}  # jwt_token -> session (one last_known_jwt per session, sould be a bijective relation)
+        self.jwt_to_session = {}  # jwt_token -> session -- it's a bijective relation; maybe multiple sessions -> data
         self.jwt_to_session_order = []  # list of jwt_token
         self.ip_to_sessions = {}  # ip -> list of session_ids
         if not MAX_SESSIONS_PER_IP or MAX_SESSIONS_PER_IP < 1:
@@ -922,6 +920,31 @@ class _StorageContainer:
             target_session_id=target_session_id,
         )
         return target_session_id, r
+
+    def find_session_by_credentials(self, email, hashed_password):
+        """
+        Search all sessions for a user with matching email and password
+        Returns (session_id, storage) if found, (None, None) otherwise
+        This allows login to work across session eviction by finding the user's original session
+        WARNING: Suboptimal, we may want to have a dict + heap mechanism to not reach O(n) with sessions, but goodenough
+        """
+        if self.DISABLE_ISOLATION_MODE:
+            return None, None
+        for heap_item in self.heap:
+            _, session_id, storage, _, _ = heap_item
+            # Search for user with matching email and password in this session's storage
+            for user in storage.users.values():
+                if user["email"] == email and user["password"] == hashed_password:
+                    log_structured(
+                        auth_logger,
+                        logging.DEBUG,
+                        "Found user in existing session",
+                        email=email,
+                        session_id=session_id,
+                        user_id=user["id"],
+                    )
+                    return session_id, storage
+        return None, None
 
     def bind_jwt_to_session_id(self, jwt_token, session_id):
         """
@@ -1581,12 +1604,37 @@ class RealWorldHandler:
         if not all([email, password]):
             log_structured(auth_logger, logging.WARNING, "Login failed: missing fields", ip=client_ip, email=email)
             return self._send_error(422, {"errors": {"body": ["Email and password are required"]}})
+        hashed_password = hash_password(password)
+        # First, try to find user in current session's storage
         user = get_user_by_email(email, storage)
-        if not user or user["password"] != hash_password(password):
-            log_structured(auth_logger, logging.WARNING, "Login failed: invalid credentials", ip=client_ip, email=email)
-            return self._send_error(401, {"errors": {"body": ["Invalid credentials"]}})
+        target_session_id = demo_session_id
+        target_storage = storage
+        # If not found in current session, search all sessions
+        if not user or user["password"] != hashed_password:
+            found_session_id, found_storage = storage_container.find_session_by_credentials(email, hashed_password)
+            if found_storage:
+                # User found in another session - create new session pointing to same storage
+                target_session_id = str(uuid.uuid4())
+                storage_container.push(time_ns(), target_session_id, data=found_storage, client_ip=client_ip)
+                target_storage = found_storage
+                user = get_user_by_email(email, target_storage)
+                log_structured(
+                    auth_logger,
+                    logging.INFO,
+                    "Login: Created new session for existing user",
+                    ip=client_ip,
+                    email=email,
+                    original_session_id=found_session_id,
+                    new_session_id=target_session_id,
+                    user_id=user["id"],
+                )
+            else:
+                log_structured(
+                    auth_logger, logging.WARNING, "Login failed: invalid credentials", ip=client_ip, email=email
+                )
+                return self._send_error(401, {"errors": {"body": ["Invalid credentials"]}})
         user["token"] = generate_token(user["id"])  # Generate new token
-        storage_container.bind_jwt_to_session_id(user["token"], demo_session_id)
+        storage_container.bind_jwt_to_session_id(user["token"], target_session_id)
         log_structured(
             auth_logger,
             logging.INFO,
@@ -1596,7 +1644,7 @@ class RealWorldHandler:
             username=user.get("username"),
             user_id=user["id"],
         )
-        return self._send_response_with_timing(200, {"user": create_user_response(user)}, demo_session_id)
+        return self._send_response_with_timing(200, {"user": create_user_response(user)}, target_session_id)
 
     @_require_auth
     def _handle_get_current_user(self, storage: InMemoryStorage):
@@ -3654,6 +3702,215 @@ class TestStorageContainer(TestCase):
         # New JWT should be bound
         self.assertEqual(container.jwt_to_session["new_jwt"], "new_session")
         self.assertIn("new_jwt", container.jwt_to_session_order)
+
+    def test_find_session_by_credentials_not_found(self):
+        """Test finding session with credentials that don't exist"""
+        container = _StorageContainer(disable_isolation_mode=False)
+        storage = InMemoryStorage()
+        container.push(1, "session_1", data=storage, client_ip=None)
+        # Search for non-existent credentials
+        found_session, found_storage = container.find_session_by_credentials(
+            "nonexistent@example.com", "hashed_password"
+        )
+        self.assertIsNone(found_session)
+        self.assertIsNone(found_storage)
+
+    def test_find_session_by_credentials_found_in_first_session(self):
+        """Test finding session with matching credentials in first session"""
+        container = _StorageContainer(disable_isolation_mode=False)
+        storage = InMemoryStorage()
+        # Add user to storage
+        storage.users.add(
+            {
+                "email": "test@example.com",
+                "username": "testuser",
+                "password": "hashed_password_123",
+                "bio": "",
+                "image": "",
+            }
+        )
+        container.push(1, "session_1", data=storage, client_ip=None)
+        # Search for the user
+        found_session, found_storage = container.find_session_by_credentials("test@example.com", "hashed_password_123")
+        self.assertEqual(found_session, "session_1")
+        self.assertIs(found_storage, storage)
+
+    def test_find_session_by_credentials_found_in_later_session(self):
+        """Test finding session with matching credentials in non-first session"""
+        container = _StorageContainer(disable_isolation_mode=False)
+        # Create first storage without the user
+        storage1 = InMemoryStorage()
+        storage1.users.add(
+            {
+                "email": "other@example.com",
+                "username": "otheruser",
+                "password": "other_password",
+                "bio": "",
+                "image": "",
+            }
+        )
+        container.push(1, "session_1", data=storage1, client_ip=None)
+        # Create second storage with the target user
+        storage2 = InMemoryStorage()
+        storage2.users.add(
+            {
+                "email": "target@example.com",
+                "username": "targetuser",
+                "password": "hashed_password_456",
+                "bio": "",
+                "image": "",
+            }
+        )
+        container.push(2, "session_2", data=storage2, client_ip=None)
+        # Search for the target user
+        found_session, found_storage = container.find_session_by_credentials(
+            "target@example.com", "hashed_password_456"
+        )
+        self.assertEqual(found_session, "session_2")
+        self.assertIs(found_storage, storage2)
+
+    def test_find_session_by_credentials_wrong_password(self):
+        """Test that wrong password returns None"""
+        container = _StorageContainer(disable_isolation_mode=False)
+        storage = InMemoryStorage()
+        storage.users.add(
+            {
+                "email": "test@example.com",
+                "username": "testuser",
+                "password": "correct_password",
+                "bio": "",
+                "image": "",
+            }
+        )
+        container.push(1, "session_1", data=storage, client_ip=None)
+        # Search with wrong password
+        found_session, found_storage = container.find_session_by_credentials("test@example.com", "wrong_password")
+        self.assertIsNone(found_session)
+        self.assertIsNone(found_storage)
+
+    def test_find_session_by_credentials_with_isolation_disabled(self):
+        """Test that method returns None when isolation is disabled"""
+        container = _StorageContainer(disable_isolation_mode=True)
+        # Even with data in heap, should return None when isolation disabled
+        found_session, found_storage = container.find_session_by_credentials("any@example.com", "any_password")
+        self.assertIsNone(found_session)
+        self.assertIsNone(found_storage)
+
+    def test_find_session_by_credentials_with_multiple_users_in_session(self):
+        """Test finding correct user when multiple users exist in a session"""
+        container = _StorageContainer(disable_isolation_mode=False)
+        storage = InMemoryStorage()
+        # Add multiple users
+        storage.users.add(
+            {"email": "user1@example.com", "username": "user1", "password": "password1", "bio": "", "image": ""}
+        )
+        storage.users.add(
+            {"email": "user2@example.com", "username": "user2", "password": "password2", "bio": "", "image": ""}
+        )
+        storage.users.add(
+            {"email": "target@example.com", "username": "target", "password": "target_password", "bio": "", "image": ""}
+        )
+        container.push(1, "session_1", data=storage, client_ip=None)
+        # Search for specific user
+        found_session, found_storage = container.find_session_by_credentials("target@example.com", "target_password")
+        self.assertEqual(found_session, "session_1")
+        self.assertIs(found_storage, storage)
+
+    def test_multiple_sessions_share_storage_survives_partial_eviction(self):
+        """
+        Test that storage persists while ANY session references it, even after some sessions are evicted.
+        Scenario:
+        1. Create session_a with storage containing user data
+        2. Create session_b pointing to same storage (simulating login on another device)
+        3. Fill up sessions to trigger evictions
+        4. Access session_a repeatedly to keep it alive
+        5. Verify session_b gets evicted (not accessed, lower priority)
+        6. Verify session_a still has access to the shared storage
+        7. Fill more sessions until session_a is also evicted
+        8. Verify storage is no longer accessible (implicitly garbage collected)
+        """
+        # Set max sessions to 3 to make evictions happen quickly
+        container = _StorageContainer(disable_isolation_mode=False, max_sessions=3)
+        # Step 1: Create session_a with storage containing user data
+        storage_shared = InMemoryStorage()
+        storage_shared.users.add(
+            {
+                "email": "shared@example.com",
+                "username": "shareduser",
+                "password": "hashed_password",
+                "bio": "Shared storage user",
+                "image": "",
+            }
+        )
+        container.push(100, "session_a", data=storage_shared, client_ip=None)
+        # Step 2: Create session_b pointing to SAME storage (simulating login on device B)
+        container.push(200, "session_b", data=storage_shared, client_ip=None)
+        # Verify both sessions see the same storage object
+        self.assertIs(container.heap[container.index_map["session_a"]][2], storage_shared)
+        self.assertIs(container.heap[container.index_map["session_b"]][2], storage_shared)
+        # Step 3: Create session_c with different storage (fills max_sessions=3)
+        storage_c = InMemoryStorage()
+        container.push(300, "session_c", data=storage_c, client_ip=None)
+        self.assertEqual(len(container.heap), 3)
+        self.assertIn("session_a", container.index_map)
+        self.assertIn("session_b", container.index_map)
+        self.assertIn("session_c", container.index_map)
+        # Step 4: Access session_a to update its priority (simulate active use)
+        container.update_priority("session_a", 1000, client_ip=None)
+        # Step 5: Create session_d - need to manually evict first (simulating get_storage behavior)
+        # At max_sessions, so pop the lowest priority item first
+        evicted = container.pop()
+        self.assertEqual(evicted[1], "session_b")  # session_b has priority 200 (lowest)
+        storage_d = InMemoryStorage()
+        container.push(400, "session_d", data=storage_d, client_ip=None)
+        # Verify session_b was evicted but session_a survives
+        self.assertNotIn("session_b", container.index_map)
+        self.assertIn("session_a", container.index_map)
+        # Step 6: Access session_a again to keep it alive
+        container.update_priority("session_a", 2000, client_ip=None)
+        # Step 7: Create session_e - manually evict lowest priority first
+        # Current: session_c (300), session_d (400), session_a (2000)
+        evicted = container.pop()
+        self.assertEqual(evicted[1], "session_c")  # session_c has lowest priority (300)
+        storage_e = InMemoryStorage()
+        container.push(500, "session_e", data=storage_e, client_ip=None)
+        # Verify session_a STILL survives and has access to shared storage
+        self.assertIn("session_a", container.index_map)
+        session_a_storage = container.heap[container.index_map["session_a"]][2]
+        self.assertIs(session_a_storage, storage_shared)
+        # Verify the user data is still accessible through session_a
+        retrieved_user = next((u for u in session_a_storage.users.values() if u["email"] == "shared@example.com"), None)
+        self.assertIsNotNone(retrieved_user)
+        self.assertEqual(retrieved_user["username"], "shareduser")
+        # Step 8: Create more sessions to eventually evict session_a
+        # Current: session_d (400), session_e (500), session_a (2000)
+        evicted = container.pop()
+        self.assertEqual(evicted[1], "session_d")  # Lowest priority 400
+        storage_f = InMemoryStorage()
+        container.push(3000, "session_f", data=storage_f, client_ip=None)
+        # session_a still alive
+        self.assertIn("session_a", container.index_map)
+        self.assertNotIn("session_d", container.index_map)
+        # Current: session_e (500), session_a (2000), session_f (3000)
+        evicted = container.pop()
+        self.assertEqual(evicted[1], "session_e")  # Lowest priority 500
+        storage_g = InMemoryStorage()
+        container.push(4000, "session_g", data=storage_g, client_ip=None)
+        # session_a still alive!
+        self.assertIn("session_a", container.index_map)
+        self.assertNotIn("session_e", container.index_map)
+        # Current: session_a (2000), session_f (3000), session_g (4000)
+        evicted = container.pop()
+        self.assertEqual(evicted[1], "session_a")  # Finally, session_a gets evicted (lowest priority 2000)
+        storage_h = InMemoryStorage()
+        container.push(5000, "session_h", data=storage_h, client_ip=None)
+        # session_a is now gone
+        self.assertNotIn("session_a", container.index_map)
+        # Step 9: Verify storage_shared is no longer in the heap
+        # (Python will garbage collect it since no references remain)
+        for heap_item in container.heap:
+            _, _, storage, _, _ = heap_item
+            self.assertIsNot(storage, storage_shared, "Shared storage should not be in any remaining session")
 
 
 class TestSaveAndLoadData(TestCase):
