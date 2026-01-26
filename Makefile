@@ -3,6 +3,7 @@
 .PHONY: test-dummy-server-unittest
 .PHONY: submodules-fetch
 .PHONY: lint lint-check
+.PHONY: patch-check patch-apply
 
 ########################
 # Help
@@ -17,6 +18,8 @@ help:
 	@echo "  submodules-fetch"
 	@echo "  lint"
 	@echo "  lint-check"
+	@echo "  patch-check"
+	@echo "  patch-apply"
 
 ########################
 # Run
@@ -67,3 +70,12 @@ lint:
 
 lint-check:
 	uvx ruff check --exclude waitress && uvx ruff format --line-length 120 --check --exclude waitress
+
+########################
+# Patch
+
+patch-check:
+	git -C angular-realworld-example-app apply --check ../patch-frontend-api-url-and-cookies.patch
+
+patch-apply:
+	git -C angular-realworld-example-app apply ../patch-frontend-api-url-and-cookies.patch

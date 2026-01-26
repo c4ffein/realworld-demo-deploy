@@ -30,10 +30,7 @@ jobs:
         uses: actions/configure-pages@v4
 
       - name: Frontend patching  # no var env for backend configuration + withCrendentials for cross domain cookie
-        run: |
-          mv patch-frontend-api-url-and-cookies.patch angular-realworld-example-app
-          cd angular-realworld-example-app
-          git apply patch-frontend-api-url-and-cookies.patch
+        run: make patch-check && make patch-apply
 
       - name: Build your site
         run: |
