@@ -20,15 +20,3 @@ index 10ff149..6d97951 100644
      provideHttpClient(
        withInterceptors([apiInterceptor, tokenInterceptor, errorInterceptor]),
      ),
-diff --git a/src/app/core/interceptors/api.interceptor.ts b/src/app/core/interceptors/api.interceptor.ts
-index c959b13..46032d3 100644
---- a/src/app/core/interceptors/api.interceptor.ts
-+++ b/src/app/core/interceptors/api.interceptor.ts
-@@ -1,6 +1,6 @@
- import { HttpInterceptorFn } from "@angular/common/http";
- 
- export const apiInterceptor: HttpInterceptorFn = (req, next) => {
--  const apiReq = req.clone({ url: `https://api.realworld.show/api${req.url}` });
-+  const apiReq = req.clone({ url: `https://api.realworld.show/api${req.url}` });
-   return next(apiReq);
- };
