@@ -25,7 +25,7 @@ run-dummy-for-prod:
 	PATH_PREFIX=api python realworld_dummy_server.py
 
 run-dummy-for-postman:
-	PATH_PREFIX=api BYPASS_ORIGIN_CHECK=True DISABLE_ISOLATION_MODE=True python realworld_dummy_server.py
+	PATH_PREFIX=api DISABLE_ISOLATION_MODE=True python realworld_dummy_server.py
 
 ########################
 # Tests
@@ -42,7 +42,7 @@ test-dummy-server-api-with-postman-and-already-launched-server:
 
 test-dummy-server-api-with-postman:
 	@set -e; \
-	PATH_PREFIX=api BYPASS_ORIGIN_CHECK=True DISABLE_ISOLATION_MODE=True python realworld_dummy_server.py & \
+	PATH_PREFIX=api DISABLE_ISOLATION_MODE=True python realworld_dummy_server.py & \
 	SERVER_PID=$$!; \
 	trap "kill $$SERVER_PID 2>/dev/null || true" EXIT; \
 	sleep 0.4; \
@@ -51,7 +51,7 @@ test-dummy-server-api-with-postman:
 	kill $$SERVER_PID 2>/dev/null || true
 
 test-dummy-server-unittest:
-	BYPASS_ORIGIN_CHECK=True python -m unittest realworld_dummy_server.py
+	python -m unittest realworld_dummy_server.py
 
 ########################
 # Submodules
