@@ -15,19 +15,13 @@ https://github.com/c4ffein/realworld-django-ninja/
 ## Key Design Decisions
 - **In-memory storage**: Data persists only during server runtime
   - Data can actually be saved on SIGINT reception if the DATA_FILE_PATH var env is set (so only handles `kill -2` rn)
-- **Per-browser isolation**: Uses an additional undocumented cookie to separate data between different browsers
-  - As the Origin header is included for POST requests regardless of origin, use it against CSRF for the
-    - regitration: POST on /users
-    - login: POST on /users/login
-  - Any other route is safe against CSRF as we are using Token in headers and not a cookie
+- **Session isolation via token**: Each JWT token is bound to a session; re-login with credentials finds your data
 - **Zero dependencies**: Python standard library only
 - **Single file**: Entire server implementation in one module
 - **Simple logging**: Of most operations (see `Deploy`)
 
 ## Rate Limiting
-- Applied per browser session (not per RealWorld user account) via the UNDOCUMENTED_DEMO_SESSION cookie
-  - Prevents the same IPv4 or IPv6 range to use too many different UNDOCUMENTED_DEMO_SESSION
-    - That way it doesn't overflow the pool of the currently saved sessions -> MAX_SESSIONS_PER_IP
+- Applied per IP address (IPv4) or /64 range (IPv6) via MAX_SESSIONS_PER_IP
 - There are limits on the objects that will be saved in memory
 
 ## Deploy
@@ -80,8 +74,6 @@ PATH_PREFIX_PARTS = PATH_PREFIX.strip("/").split("/")
 DISABLE_ISOLATION_MODE = getenv("DISABLE_ISOLATION_MODE", "FALSE").lower() == "true"
 MAX_SESSIONS = int(getenv("MAX_SESSIONS") or 3000)
 MAX_SESSIONS_PER_IP = int(getenv("MAX_SESSIONS_PER_IP") or 30)
-BYPASS_ORIGIN_CHECK = getenv("BYPASS_ORIGIN_CHECK", "FALSE").lower() == "true"
-ALLOWED_ORIGINS_FOR_DEMO_SESSION_COOKIE = getenv("ALLOWED_ORIGINS_FOR_DEMO_SESSION_COOKIE", "").split(";")
 # client ip detection
 CLIENT_IP_HEADER = getenv("CLIENT_IP_HEADER")  # Optional header name for client IP detection
 # logging
@@ -94,7 +86,7 @@ DATA_FILE_PATH = (lambda path: Path(path) if path else None)(getenv("DATA_FILE_P
 # max lengths for keys and objects per session
 MAX_ID_LEN = int(getenv("MAX_ID_LEN", 64))
 MAX_USERS_PER_SESSION = int(getenv("MAX_USERS_PER_SESSION", 60))
-MAX_ARTICLES_PER_SESSION = int(getenv("MAX_ARTICLES_PER_SESSION", 10))
+MAX_ARTICLES_PER_SESSION = int(getenv("MAX_ARTICLES_PER_SESSION", 20))
 MAX_COMMENTS_PER_SESSION = int(getenv("MAX_COMMENTS_PER_SESSION", 20))
 MAX_FOLLOWS_PER_SESSION = int(getenv("MAX_FOLLOWS_PER_SESSION", 100))
 MAX_FAVORITES_PER_SESSION = int(getenv("MAX_FAVORITES_PER_SESSION", 100))
@@ -1247,20 +1239,8 @@ class RealWorldHandler:
             # Get auth header
             auth_header = environ.get("HTTP_AUTHORIZATION", "")
             token = auth_header.replace("Token ", "") if auth_header.startswith("Token ") else None
-            # Get demo session cookie from HTTP_COOKIE
-            demo_session_cookie = None
-            cookie_header = environ.get("HTTP_COOKIE", "")
-            if cookie_header:
-                for cookie in cookie_header.split(";"):
-                    if "=" in cookie:
-                        name, value = cookie.strip().split("=", 1)
-                        if name == "UNDOCUMENTED_DEMO_SESSION":
-                            demo_session_cookie = value
-                            break
-            # Get storage
-            self.target_session_id, self.storage = storage_container.get_storage(
-                demo_session_cookie if self._check_csrf_protection() else None, client_ip, token
-            )
+            # Get storage (session identified by token, not cookie)
+            self.target_session_id, self.storage = storage_container.get_storage(None, client_ip, token)
             # Set instance variables
             self.current_user_id = verify_token(token, self.storage, client_ip) if token else None
         except Exception as exc:
@@ -1342,9 +1322,9 @@ class RealWorldHandler:
             path_parts = path_parts[len(PATH_PREFIX_PARTS) :]
         # Route to handlers
         if method == "POST" and path_parts == ["users"]:
-            return self._handle_register(self.storage, self.target_session_id)
+            return self._handle_register(self.storage)
         elif method == "POST" and path_parts == ["users", "login"]:
-            return self._handle_login(self.storage, self.target_session_id)
+            return self._handle_login(self.storage)
         elif method == "GET" and path_parts == ["user"]:
             return self._handle_get_current_user(self.storage)
         elif method == "PUT" and path_parts == ["user"]:
@@ -1418,23 +1398,10 @@ class RealWorldHandler:
         )
         return parsed_body
 
-    def _get_demo_session_cookie(self) -> Optional[str]:
-        """Get UNDOCUMENTED_DEMO_SESSION cookie value"""
-        cookie_header = self.headers.get("Cookie", "")
-        if "UNDOCUMENTED_DEMO_SESSION=" not in cookie_header:
-            return None
-        # Extract cookie value (simple parsing)
-        for cookie in cookie_header.split(";"):
-            cookie = cookie.strip()
-            if cookie.startswith("UNDOCUMENTED_DEMO_SESSION="):
-                return cookie.split("=", 1)[1]
-        return None
-
     def _send_response(
         self,
         status_code: int,
         data: Optional[Dict],
-        demo_session_id: Optional[str] = None,
         start_time: int = None,
         method: str = None,
         path: str = None,
@@ -1452,8 +1419,6 @@ class RealWorldHandler:
             ("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS"),
             ("Access-Control-Allow-Headers", "Content-Type, Authorization"),
         ]
-        if demo_session_id:
-            headers.append(("Set-Cookie", f"UNDOCUMENTED_DEMO_SESSION={demo_session_id}; Path=/"))
         # Send response
         status_reason = {200: "OK", 201: "Created", 204: "No Content", 400: "Bad Request", 404: "Not Found"}.get(
             status_code, "Error"
@@ -1485,45 +1450,18 @@ class RealWorldHandler:
         start_time = start_time or getattr(self, "_request_start_time", None)
         method = method or getattr(self, "_request_method", None)
         path = path or getattr(self, "_request_path", None)
-        return self._send_response(status_code, error_data, None, start_time, method, path)
+        return self._send_response(status_code, error_data, start_time, method, path)
 
-    def _send_response_with_timing(self, status_code: int, data: Dict, demo_session_id: Optional[uuid.UUID] = None):
+    def _send_response_with_timing(self, status_code: int, data: Dict):
         """Send response with automatic timing from stored request data"""
         start_time = getattr(self, "_request_start_time", None)
         method = getattr(self, "_request_method", None)
         path = getattr(self, "_request_path", None)
-        return self._send_response(status_code, data, demo_session_id, start_time, method, path)
-
-    def _check_csrf_protection(self) -> bool:
-        """Check CSRF protection using Origin header for non-GET requests"""
-        origin = self.environ.get("HTTP_ORIGIN")
-        client_ip = self._get_client_ip()
-        if self._request_method == "GET":
-            log_structured(
-                security_logger, logging.DEBUG, "no CSRF protection for GET", ip=client_ip, origin=origin, bypass=True
-            )
-            return True
-        if BYPASS_ORIGIN_CHECK:
-            log_structured(
-                security_logger, logging.DEBUG, "CSRF protection bypassed", ip=client_ip, origin=origin, bypass=True
-            )
-            return True
-        if origin in ALLOWED_ORIGINS_FOR_DEMO_SESSION_COOKIE:
-            log_structured(security_logger, logging.DEBUG, "CSRF protection passed", ip=client_ip, origin=origin)
-            return True
-        log_structured(
-            security_logger,
-            logging.WARNING,
-            "CSRF protection failed",
-            ip=client_ip,
-            origin=origin,
-            allowed_origins_for_demo_session_cookie=ALLOWED_ORIGINS_FOR_DEMO_SESSION_COOKIE,
-        )
-        return False
+        return self._send_response(status_code, data, start_time, method, path)
 
     # Auth endpoints
 
-    def _handle_register(self, storage: InMemoryStorage, demo_session_id: str):
+    def _handle_register(self, storage: InMemoryStorage):
         """POST /users - Register new user"""
         data = self._get_request_body()
         user_data = data.get("user", {})
@@ -1542,7 +1480,7 @@ class RealWorldHandler:
             )
             return self._send_error(422, {"errors": {"body": ["Email, username and password are required"]}})
         max_lens = ((email, MAX_LEN_USER_EMAIL), (username, MAX_LEN_USER_USERNAME), (password, MAX_LEN_USER_PASSWORD))
-        if not all(type[d] is str for d in (email, username, password)) and not all(
+        if not all(type(d) is str for d in (email, username, password)) or not all(
             len(variable) <= max_allowed_length for variable, max_allowed_length in max_lens
         ):
             err_str = "Email, username and password are expected as strings of length less than "
@@ -1581,7 +1519,7 @@ class RealWorldHandler:
         user_id = user["id"]
         # Generate token after we have the user_id
         token = generate_token(user_id)
-        storage_container.bind_jwt_to_session_id(token, demo_session_id)
+        storage_container.bind_jwt_to_session_id(token, self.target_session_id)
         user["token"] = token
         log_structured(
             auth_logger,
@@ -1592,9 +1530,9 @@ class RealWorldHandler:
             username=username,
             user_id=user_id,
         )
-        return self._send_response_with_timing(201, {"user": create_user_response(user)}, demo_session_id)
+        return self._send_response_with_timing(201, {"user": create_user_response(user)})
 
-    def _handle_login(self, storage: InMemoryStorage, demo_session_id: str):
+    def _handle_login(self, storage: InMemoryStorage):
         """POST /users/login - Login user"""
         data = self._get_request_body()
         user_data = data.get("user", {})
@@ -1607,7 +1545,7 @@ class RealWorldHandler:
         hashed_password = hash_password(password)
         # First, try to find user in current session's storage
         user = get_user_by_email(email, storage)
-        target_session_id = demo_session_id
+        target_session_id = self.target_session_id
         target_storage = storage
         # If not found in current session, search all sessions
         if not user or user["password"] != hashed_password:
@@ -1644,7 +1582,7 @@ class RealWorldHandler:
             username=user.get("username"),
             user_id=user["id"],
         )
-        return self._send_response_with_timing(200, {"user": create_user_response(user)}, target_session_id)
+        return self._send_response_with_timing(200, {"user": create_user_response(user)})
 
     @_require_auth
     def _handle_get_current_user(self, storage: InMemoryStorage):
@@ -2080,7 +2018,6 @@ def run_server(port: int = 8000):
         logging.INFO,
         "Security config",
         isolation_disabled=DISABLE_ISOLATION_MODE,
-        csrf_bypass=BYPASS_ORIGIN_CHECK,
         max_sessions=MAX_SESSIONS,
     )
     # Log data persistence configuration
