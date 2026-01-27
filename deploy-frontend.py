@@ -59,6 +59,7 @@ def deploy_atomic(src: Path, dest: Path, keep_versions: int = 3, save_version_en
     # Hashed files contain a hash pattern like -ABC123. or .abc123. before extension
     def is_hashed(filename: str) -> bool:
         import re
+
         basename = filename.rsplit("/", 1)[-1]
         # Match patterns like: chunk-ABC123.js, main-XYZ789.js, styles-ABC123.css
         return bool(re.search(r"[-.][A-Za-z0-9]{7,}\.[a-z]+$", basename))
@@ -77,7 +78,9 @@ def deploy_atomic(src: Path, dest: Path, keep_versions: int = 3, save_version_en
             dest_file.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(src_file, dest_file)
             copied_hashed += 1
-    print(f"Copied {copied_hashed}/{len(hashed_files)} hashed assets (skipped {len(hashed_files) - copied_hashed} unchanged)")
+    print(
+        f"Copied {copied_hashed}/{len(hashed_files)} hashed assets (skipped {len(hashed_files) - copied_hashed} unchanged)"
+    )
 
     # Phase 2: Copy entry point files (index.html, etc.)
     print(f"Copying {len(entry_files)} entry files...")
