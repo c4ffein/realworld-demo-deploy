@@ -1,6 +1,3 @@
-[submodule "angular-realworld-example-app"]
-	path = angular-realworld-example-app
-	url = https://github.com/gothinkster/angular-realworld-example-app.git
 [submodule "realworld"]
 	path = realworld
 	url = https://github.com/gothinkster/realworld.git
