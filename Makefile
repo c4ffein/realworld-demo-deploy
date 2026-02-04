@@ -65,7 +65,7 @@ submodules-fetch:
 # Lint
 
 lint:
-	uvx ruff check --fix --exclude waitress; uvx ruff format --line-length 120 --exclude waitress
+	uvx ruff check --fix; uvx ruff format --line-length 120
 
 lint-check:
-	uvx ruff check --exclude waitress && uvx ruff format --line-length 120 --check --exclude waitress
+	uvx ruff check && uvx ruff format --line-length 120 --check
