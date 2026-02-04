@@ -36,8 +36,8 @@ export POPULATE_DEMO_DATA=True  # includes mocked data for the demo
 export CLIENT_IP_HEADER=X-Forwarded-For  # use `X-Forwarded-For` to define the ip address of the client
 export LOG_FILE=log_files/json_lines.log  # location of the log file (will be rotated)
 
-# Run the server
-python3 realworld_dummy_server.py 8080
+# Run the server (using uvx to fetch dependencies)
+uvx --with fastapi --with uvicorn python realworld_dummy_server.py 8080
 ```
 
 See [the angular frontend README](https://github.com/gothinkster/angular-realworld-example-app) for deployment without using [this GitHub Pages Action](https://github.com/c4ffein/realworld-demo-deploy/blob/master/.github/workflows/deploy.yml)

@@ -4,6 +4,8 @@
 .PHONY: submodules-fetch
 .PHONY: lint lint-check
 
+PYTHON = uvx --with fastapi --with uvicorn python
+
 ########################
 # Help
 
@@ -22,10 +24,10 @@ help:
 # Run
 
 run-dummy-for-prod:
-	PATH_PREFIX=api python realworld_dummy_server.py
+	PATH_PREFIX=/api $(PYTHON) realworld_dummy_server.py
 
 run-dummy-for-postman:
-	PATH_PREFIX=api DISABLE_ISOLATION_MODE=True python realworld_dummy_server.py
+	PATH_PREFIX=/api DISABLE_ISOLATION_MODE=True $(PYTHON) realworld_dummy_server.py
 
 ########################
 # Tests
@@ -42,16 +44,16 @@ test-dummy-server-api-with-postman-and-already-launched-server:
 
 test-dummy-server-api-with-postman:
 	@set -e; \
-	PATH_PREFIX=api DISABLE_ISOLATION_MODE=True python realworld_dummy_server.py & \
+	PATH_PREFIX=/api DISABLE_ISOLATION_MODE=True $(PYTHON) realworld_dummy_server.py & \
 	SERVER_PID=$$!; \
 	trap "kill $$SERVER_PID 2>/dev/null || true" EXIT; \
-	sleep 0.4; \
+	sleep 2; \
 	kill -0 "$$SERVER_PID" 2>/dev/null || exit 4; \
 	make test-dummy-server-api-with-postman-and-already-launched-server; \
 	kill $$SERVER_PID 2>/dev/null || true
 
 test-dummy-server-unittest:
-	python -m unittest realworld_dummy_server.py
+	uvx --with fastapi --with uvicorn --with pytest python -m pytest realworld_dummy_server.py
 
 ########################
 # Submodules

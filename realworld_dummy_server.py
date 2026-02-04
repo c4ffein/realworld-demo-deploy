@@ -5,7 +5,7 @@ RealWorld API Implementation - Single File Demo Server
 ⚠️  THIS IS PROBABLY NOT THE PROJECT YOU ARE LOOKING FOR  ⚠️
 
 This is the opposite of what you'd expect in a real-world project: a single-file,
-in-memory, framework-free implementation of the RealWorld API specification.
+in-memory implementation of the RealWorld API specification.
 
 ## Purpose
 Demo backend for testing/development that manages all data in memory.
@@ -16,7 +16,7 @@ https://github.com/c4ffein/realworld-django-ninja/
 - **In-memory storage**: Data persists only during server runtime
   - Data can actually be saved on SIGINT reception if the DATA_FILE_PATH var env is set (so only handles `kill -2` rn)
 - **Session isolation via token**: Each JWT token is bound to a session; re-login with credentials finds your data
-- **Zero dependencies**: Python standard library only
+- **Minimal dependencies**: Only FastAPI + uvicorn
 - **Single file**: Entire server implementation in one module
 - **Simple logging**: Of most operations (see `Deploy`)
 
@@ -51,18 +51,17 @@ import re
 import sys
 import time
 import uuid
+from contextlib import asynccontextmanager
 from datetime import datetime, timezone
-from urllib.parse import parse_qs
 from os import getenv
 from pathlib import Path
 from time import time_ns
-from traceback import format_tb
-from typing import Dict, List, Optional, Tuple
+from typing import Annotated, Dict, List, Optional, Tuple
 from unittest import TestCase
 from unittest.mock import patch
 
-sys.path.insert(0, "./waitress/src")
-from waitress import serve
+from fastapi import Depends, FastAPI, Header, HTTPException, Request, Response
+from fastapi.middleware.cors import CORSMiddleware
 
 #### CONFIGURATION #####################################################################################################
 
@@ -961,6 +960,82 @@ class _StorageContainer:
 storage_container = _StorageContainer()
 
 
+# FastAPI App Setup
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Lifespan context manager for startup/shutdown events."""
+    load_data()
+    yield
+    save_data()
+
+
+app = FastAPI(title="RealWorld API", lifespan=lifespan)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+
+# Dependencies
+def get_client_ip(request: Request) -> str:
+    """Get client IP address from header (if configured) or request."""
+    if CLIENT_IP_HEADER:
+        header_value = request.headers.get(CLIENT_IP_HEADER)
+        if header_value:
+            return header_value.split(",")[0].strip()
+    return request.client.host if request.client else "127.0.0.1"
+
+
+def get_storage_and_session(
+    request: Request,
+    authorization: Annotated[str | None, Header()] = None,
+) -> Tuple[str, InMemoryStorage, str | None]:
+    """Get storage, session_id, and token from request."""
+    client_ip = get_client_ip(request)
+    token = authorization.replace("Token ", "") if authorization and authorization.startswith("Token ") else None
+    session_id, storage = storage_container.get_storage(None, client_ip, token)
+    return session_id, storage, token
+
+
+class AuthContext:
+    """Context holder for auth info and storage."""
+
+    def __init__(self, session_id: str, storage: InMemoryStorage, current_user_id: str | None, client_ip: str):
+        self.session_id = session_id
+        self.storage = storage
+        self.current_user_id = current_user_id
+        self.client_ip = client_ip
+
+
+def get_auth_context(
+    request: Request,
+    authorization: Annotated[str | None, Header()] = None,
+) -> AuthContext:
+    """Get full auth context including storage and current user."""
+    client_ip = get_client_ip(request)
+    token = authorization.replace("Token ", "") if authorization and authorization.startswith("Token ") else None
+    session_id, storage = storage_container.get_storage(None, client_ip, token)
+    current_user_id = verify_token(token, storage, client_ip) if token else None
+    return AuthContext(session_id, storage, current_user_id, client_ip)
+
+
+def require_auth(ctx: AuthContext) -> AuthContext:
+    """Require authentication, raises 401 if not authenticated."""
+    if ctx.current_user_id is None:
+        log_structured(
+            security_logger,
+            logging.WARNING,
+            "Authentication required but not provided",
+            ip=ctx.client_ip,
+            auth_required=True,
+        )
+        raise HTTPException(status_code=401, detail={"errors": {"body": ["Unauthorized"]}})
+    return ctx
+
+
 def save_data():
     """Save storage_container data to JSON file - WARNING the current implementation wipes all session to ip data"""
     if not DATA_FILE_PATH:
@@ -1219,797 +1294,525 @@ def create_comment_response(comment: Dict, storage: InMemoryStorage, current_use
     }
 
 
-class RealWorldHandler:
-    """WSGI application for RealWorld API"""
+#### FASTAPI ROUTES ####################################################################################################
 
-    def __call__(self, environ, start_response):
-        """WSGI application entry point"""
-        try:
-            self.environ = environ
-            self.start_response = start_response
-            self._request_start_time = time_ns()
 
-            # Get request info
-            self._request_method = environ["REQUEST_METHOD"]
-            self._request_path = environ.get("PATH_INFO", "/")
-            self._query_string = environ.get("QUERY_STRING", "")
-            self._query_params = parse_qs(self._query_string) if self._query_string else {}
-            # Get client IP
-            client_ip = self._get_client_ip()
-            # Get auth header
-            auth_header = environ.get("HTTP_AUTHORIZATION", "")
-            token = auth_header.replace("Token ", "") if auth_header.startswith("Token ") else None
-            # Get storage (session identified by token, not cookie)
-            self.target_session_id, self.storage = storage_container.get_storage(None, client_ip, token)
-            # Set instance variables
-            self.current_user_id = verify_token(token, self.storage, client_ip) if token else None
-        except Exception as exc:
-            log_structured(
-                http_logger,
-                logging.ERROR,
-                "Internal Server Error",
-                method=getattr(self, "_request_method", None),
-                path=getattr(self, "_request_path", None),
-                exception_type=str(exc),
-                exception_traceback=format_tb(exc.__traceback__),
-            )
-            return self._send_error(500, "Internal Server Error")
-        # Route request
-        try:
-            return self._handle_request(self._request_method, self._request_path, self._query_params)
-        except Exception as exc:
-            log_structured(
-                http_logger,
-                logging.ERROR,
-                "Internal Server Error",
-                method=self._request_method,
-                path=self._request_path,
-                exception_type=str(exc),
-                exception_traceback=format_tb(exc.__traceback__),
-            )
-            return self._send_error(500, "Internal Server Error")
-
-    @staticmethod
-    def _require_auth(func):
-        """Require authentication, only executes the wrapped method if current_user_id is not None, else returns 401"""
-
-        def wrapper(self, *args, **kwargs):
-            if self.current_user_id is None:
-                client_ip = self._get_client_ip()
-                log_structured(
-                    security_logger,
-                    logging.WARNING,
-                    "Authentication required but not provided",
-                    ip=client_ip,
-                    auth_required=True,
-                )
-                return self._send_error(401, {"errors": {"body": ["Unauthorized"]}})
-            return func(self, *args, **kwargs)
-
-        return wrapper
-
-    def _get_client_ip(self):
-        """Get client IP address from header (if configured) or environ"""
-        if CLIENT_IP_HEADER:
-            header_key = f"HTTP_{CLIENT_IP_HEADER.upper().replace('-', '_')}"
-            header_value = self.environ.get(header_key)
-            if header_value:
-                return header_value.split(",")[0].strip()
-        return self.environ.get("REMOTE_ADDR", "127.0.0.1")
-
-    def _handle_request(self, method: str, path: str, query_params: dict):
-        """Route request to appropriate handler"""
-        # Log request entry point
-        log_structured(http_logger, logging.INFO, "Request received")
-
-        # Remove leading slash and split path
-        path_parts = path.strip("/").split("/")
-
-        # Log request treatment start
-        client_ip = self._get_client_ip()
-        log_structured(
-            http_logger,
-            logging.INFO,
-            "Request treatment started",
-            method=method,
-            path=path,
-            ip=client_ip,
-            user_id=self.current_user_id,
-        )
-        if PATH_PREFIX_PARTS:
-            if not path_parts[: len(PATH_PREFIX_PARTS)] == PATH_PREFIX_PARTS:
-                return self._send_error(404, {"errors": {"body": ["Not found"]}})
-            path_parts = path_parts[len(PATH_PREFIX_PARTS) :]
-        # Route to handlers
-        if method == "POST" and path_parts == ["users"]:
-            return self._handle_register(self.storage)
-        elif method == "POST" and path_parts == ["users", "login"]:
-            return self._handle_login(self.storage)
-        elif method == "GET" and path_parts == ["user"]:
-            return self._handle_get_current_user(self.storage)
-        elif method == "PUT" and path_parts == ["user"]:
-            return self._handle_update_user(self.storage)
-        elif method == "GET" and path_parts[0] == "profiles" and len(path_parts) == 2:
-            return self._handle_get_profile(self.storage, path_parts[1])
-        elif method == "POST" and len(path_parts) == 3 and path_parts[0] == "profiles" and path_parts[2] == "follow":
-            return self._handle_follow_user(self.storage, path_parts[1])
-        elif method == "DELETE" and len(path_parts) == 3 and path_parts[0] == "profiles" and path_parts[2] == "follow":
-            return self._handle_unfollow_user(self.storage, path_parts[1])
-        elif method == "GET" and path_parts == ["articles"]:
-            return self._handle_list_articles(self.storage, query_params)
-        elif method == "GET" and path_parts == ["articles", "feed"]:
-            return self._handle_articles_feed(self.storage, query_params)
-        elif method == "POST" and path_parts == ["articles"]:
-            return self._handle_create_article(self.storage)
-        elif method == "GET" and len(path_parts) == 2 and path_parts[0] == "articles":
-            return self._handle_get_article(self.storage, path_parts[1])
-        elif method == "PUT" and len(path_parts) == 2 and path_parts[0] == "articles":
-            return self._handle_update_article(self.storage, path_parts[1])
-        elif method == "DELETE" and len(path_parts) == 2 and path_parts[0] == "articles":
-            return self._handle_delete_article(self.storage, path_parts[1])
-        elif method == "POST" and len(path_parts) == 3 and path_parts[0] == "articles" and path_parts[2] == "favorite":
-            return self._handle_favorite_article(self.storage, path_parts[1])
-        elif (
-            method == "DELETE" and len(path_parts) == 3 and path_parts[0] == "articles" and path_parts[2] == "favorite"
-        ):
-            return self._handle_unfavorite_article(self.storage, path_parts[1])
-        elif method == "GET" and len(path_parts) == 3 and path_parts[0] == "articles" and path_parts[2] == "comments":
-            return self._handle_get_comments(self.storage, path_parts[1])
-        elif method == "POST" and len(path_parts) == 3 and path_parts[0] == "articles" and path_parts[2] == "comments":
-            return self._handle_create_comment(self.storage, path_parts[1])
-        elif (
-            method == "DELETE" and len(path_parts) == 4 and path_parts[0] == "articles" and path_parts[2] == "comments"
-        ):
-            return self._handle_delete_comment(self.storage, path_parts[1], int(path_parts[3]))
-        elif method == "GET" and path_parts == ["tags"]:
-            return self._handle_get_tags(self.storage)
-        elif method == "OPTIONS":
-            return self._handle_options()
-        else:
-            return self._send_error(404, {"errors": {"body": ["Not found"]}})
-
-    def _handle_options(self):
-        """Handle OPTIONS requests for CORS"""
-        headers = [
-            ("Access-Control-Allow-Origin", "*"),
-            ("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS"),
-            ("Access-Control-Allow-Headers", "Content-Type, Authorization"),
-        ]
-        self.start_response("200 OK", headers)
-        return [b""]
-
-    def _get_request_body(self) -> Dict:
-        """Parse JSON request body"""
-        content_length = int(self.environ.get("CONTENT_LENGTH", 0))
-        if content_length == 0:
-            log_structured(
-                http_logger, logging.DEBUG, "Request body: empty (no content-length)", payload_size=0, has_body=False
-            )
-            return {}
-        body = self.environ["wsgi.input"].read(content_length).decode("utf-8")
-        parsed_body = json.loads(body) if body else {}
-
-        # Log detailed request payload at debug level
-        client_ip = self._get_client_ip()
-        log_structured(
-            *(http_logger, logging.DEBUG, "Request body received"),
-            **{"payload_size": content_length, "body_preview": body[:200], "ip": client_ip, "has_body": True},
-            **{"content_length": content_length, "body_truncated": len(body) > 200},
-        )
-        return parsed_body
-
-    def _send_response(
-        self,
-        status_code: int,
-        data: Optional[Dict],
-        start_time: int = None,
-        method: str = None,
-        path: str = None,
-    ):
-        """Send JSON response"""
-        if data is not None:
-            response_body = json.dumps(data, indent=2)
-            response_body_bytes = response_body.encode("utf-8")
-        else:
-            response_body, response_body_bytes = None, b""
-        # Prepare headers
-        headers = [
-            ("Content-Type", "application/json"),
-            ("Access-Control-Allow-Origin", "*"),
-            ("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS"),
-            ("Access-Control-Allow-Headers", "Content-Type, Authorization"),
-        ]
-        # Send response
-        status_reason = {200: "OK", 201: "Created", 204: "No Content", 400: "Bad Request", 404: "Not Found"}.get(
-            status_code, "Error"
-        )
-        status_text = f"{status_code} {status_reason}"
-        # Log response
-        duration_ms = (time_ns() - start_time) / 1_000_000 if start_time else None
-        client_ip = self._get_client_ip()
-        response_size = len(response_body_bytes)
-        log_structured(
-            http_logger,
-            logging.INFO,
-            "Request completed",
-            method=method,
-            path=path,
-            status_code=status_code,
-            duration_ms=duration_ms,
-            response_size=response_size,
-            ip=client_ip,
-        )
-        self.start_response(status_text, headers)
-        return [response_body_bytes] if response_body_bytes else []
-
-    def _send_error(
-        self, status_code: int, error_data: Dict, start_time: int = None, method: str = None, path: str = None
-    ):
-        """Send error response"""
-        # Use stored request timing if available
-        start_time = start_time or getattr(self, "_request_start_time", None)
-        method = method or getattr(self, "_request_method", None)
-        path = path or getattr(self, "_request_path", None)
-        return self._send_response(status_code, error_data, start_time, method, path)
-
-    def _send_response_with_timing(self, status_code: int, data: Dict):
-        """Send response with automatic timing from stored request data"""
-        start_time = getattr(self, "_request_start_time", None)
-        method = getattr(self, "_request_method", None)
-        path = getattr(self, "_request_path", None)
-        return self._send_response(status_code, data, start_time, method, path)
-
-    # Auth endpoints
-
-    def _handle_register(self, storage: InMemoryStorage):
-        """POST /users - Register new user"""
-        data = self._get_request_body()
-        user_data = data.get("user", {})
-        email = user_data.get("email")
-        username = user_data.get("username")
-        password = user_data.get("password")
-        client_ip = self._get_client_ip()
-        if not all([email, username, password]):
-            log_structured(
-                auth_logger,
-                logging.WARNING,
-                "Registration failed: missing fields",
-                ip=client_ip,
-                email=email,
-                username=username,
-            )
-            return self._send_error(422, {"errors": {"body": ["Email, username and password are required"]}})
-        max_lens = ((email, MAX_LEN_USER_EMAIL), (username, MAX_LEN_USER_USERNAME), (password, MAX_LEN_USER_PASSWORD))
-        if not all(type(d) is str for d in (email, username, password)) or not all(
-            len(variable) <= max_allowed_length for variable, max_allowed_length in max_lens
-        ):
-            err_str = "Email, username and password are expected as strings of length less than "
-            err_str += f"{MAX_LEN_USER_EMAIL}, {MAX_LEN_USER_USERNAME}, and {MAX_LEN_USER_PASSWORD}, respectively"
-            log_structured(
-                auth_logger,
-                logging.WARNING,
-                "Registration failed: invalid field lengths",
-                ip=client_ip,
-                email=email,
-                username=username,
-            )
-            return self._send_error(422, {"errors": {"body": [err_str]}})
-        # Check if user already exists
-        if get_user_by_email(email, storage) or get_user_by_username(username, storage):
-            log_structured(
-                auth_logger,
-                logging.WARNING,
-                "Registration failed: user already exists",
-                ip=client_ip,
-                email=email,
-                username=username,
-            )
-            return self._send_error(409, {"errors": {"body": ["User already exists"]}})
-        # Create new user
-        user = {
-            "email": email,
-            "username": username,
-            "password": hash_password(password),
-            "bio": "",
-            "image": DEMO_DATA_DEFAULT_IMAGE,
-            "createdAt": get_current_time(),
-        }
-        # Add user and get the auto-assigned ID
-        user = storage.users.add(user)
-        user_id = user["id"]
-        # Generate token after we have the user_id
-        token = generate_token(user_id)
-        storage_container.bind_jwt_to_session_id(token, self.target_session_id)
-        user["token"] = token
+# Auth endpoints
+@app.post(f"{PATH_PREFIX}/users", status_code=201)
+def register(request: Request, ctx: Annotated[AuthContext, Depends(get_auth_context)]):
+    """POST /users - Register new user"""
+    data = request.scope.get("_body_json", {})
+    user_data = data.get("user", {})
+    email = user_data.get("email")
+    username = user_data.get("username")
+    password = user_data.get("password")
+    if not all([email, username, password]):
         log_structured(
             auth_logger,
-            logging.INFO,
-            "User registered successfully",
-            ip=client_ip,
+            logging.WARNING,
+            "Registration failed: missing fields",
+            ip=ctx.client_ip,
             email=email,
             username=username,
-            user_id=user_id,
         )
-        return self._send_response_with_timing(201, {"user": create_user_response(user)})
-
-    def _handle_login(self, storage: InMemoryStorage):
-        """POST /users/login - Login user"""
-        data = self._get_request_body()
-        user_data = data.get("user", {})
-        email = user_data.get("email")
-        password = user_data.get("password")
-        client_ip = self._get_client_ip()
-        if not all([email, password]):
-            log_structured(auth_logger, logging.WARNING, "Login failed: missing fields", ip=client_ip, email=email)
-            return self._send_error(422, {"errors": {"body": ["Email and password are required"]}})
-        hashed_password = hash_password(password)
-        # First, try to find user in current session's storage
-        user = get_user_by_email(email, storage)
-        target_session_id = self.target_session_id
-        target_storage = storage
-        # If not found in current session, search all sessions
-        if not user or user["password"] != hashed_password:
-            found_session_id, found_storage = storage_container.find_session_by_credentials(email, hashed_password)
-            if found_storage:
-                # User found in another session - create new session pointing to same storage
-                target_session_id = str(uuid.uuid4())
-                storage_container.push(time_ns(), target_session_id, data=found_storage, client_ip=client_ip)
-                target_storage = found_storage
-                user = get_user_by_email(email, target_storage)
-                log_structured(
-                    auth_logger,
-                    logging.INFO,
-                    "Login: Created new session for existing user",
-                    ip=client_ip,
-                    email=email,
-                    original_session_id=found_session_id,
-                    new_session_id=target_session_id,
-                    user_id=user["id"],
-                )
-            else:
-                log_structured(
-                    auth_logger, logging.WARNING, "Login failed: invalid credentials", ip=client_ip, email=email
-                )
-                return self._send_error(401, {"errors": {"body": ["Invalid credentials"]}})
-        user["token"] = generate_token(user["id"])  # Generate new token
-        storage_container.bind_jwt_to_session_id(user["token"], target_session_id)
+        raise HTTPException(status_code=422, detail={"errors": {"body": ["Email, username and password are required"]}})
+    max_lens = ((email, MAX_LEN_USER_EMAIL), (username, MAX_LEN_USER_USERNAME), (password, MAX_LEN_USER_PASSWORD))
+    if not all(type(d) is str for d in (email, username, password)) or not all(len(v) <= m for v, m in max_lens):
+        err_str = f"Email, username and password are expected as strings of length less than {MAX_LEN_USER_EMAIL}, {MAX_LEN_USER_USERNAME}, and {MAX_LEN_USER_PASSWORD}, respectively"
         log_structured(
             auth_logger,
-            logging.INFO,
-            "User logged in successfully",
-            ip=client_ip,
+            logging.WARNING,
+            "Registration failed: invalid field lengths",
+            ip=ctx.client_ip,
             email=email,
-            username=user.get("username"),
-            user_id=user["id"],
+            username=username,
         )
-        return self._send_response_with_timing(200, {"user": create_user_response(user)})
-
-    @_require_auth
-    def _handle_get_current_user(self, storage: InMemoryStorage):
-        """GET /user - Get current user"""
-        user = storage.users.get(self.current_user_id)
-        return self._send_response(200, {"user": create_user_response(user)})
-
-    def _helper_update_user_field(self, source_dict, target_dict, name, max_len):
-        """returns response if there is an error, None otherwise"""
-        if name not in source_dict:
-            return None
-        if type(source_dict[name]) is not str or len(source_dict[name]) > max_len:
-            err_str = f"{name} is an optional string of length <= {max_len}"
-            return self._send_error(422, {"errors": {"body": [err_str]}})
-        target_dict[name] = source_dict[name]
-        return None
-
-    @_require_auth
-    def _handle_update_user(self, storage: InMemoryStorage):
-        """PUT /user - Update current user"""
-        data = self._get_request_body()
-        user_data = data.get("user", {})
-        user_update = {}
-        # Update fields if provided
-        error_response = (
-            self._helper_update_user_field(user_data, user_update, "username", MAX_LEN_USER_USERNAME)
-            or self._helper_update_user_field(user_data, user_update, "password", MAX_LEN_USER_PASSWORD)
-            or self._helper_update_user_field(user_data, user_update, "bio", MAX_LEN_USER_BIO)
-            or self._helper_update_user_field(user_data, user_update, "image", MAX_LEN_USER_IMAGE)
-        )
-        if error_response:
-            return error_response
-        if "password" in user_update:
-            user_update["password"] = hash_password(user_update["password"])
-        user = storage.users.get(self.current_user_id)
-        user.update(**user_update)
-        return self._send_response(200, {"user": create_user_response(user)})
-
-    # Profile endpoints
-
-    def _handle_get_profile(self, storage: InMemoryStorage, username: str):
-        """GET /profiles/{username} - Get profile"""
-        user = get_user_by_username(username, storage)
-        if not user:
-            return self._send_error(404, {"errors": {"body": ["Profile not found"]}})
-        return self._send_response(200, {"profile": create_profile_response(user, storage, self.current_user_id)})
-
-    @_require_auth
-    def _handle_follow_user(self, storage: InMemoryStorage, username: str):
-        """POST /profiles/{username}/follow - Follow user"""
-        target_user = get_user_by_username(username, storage)
-        if not target_user:
-            return self._send_error(404, {"errors": {"body": ["Profile not found"]}})
-        if target_user["id"] == self.current_user_id:
-            return self._send_error(422, {"errors": {"body": ["Cannot follow yourself"]}})
-        storage.follows.add(self.current_user_id, target_user["id"])
-        # Log successful follow operation
-        client_ip = self._get_client_ip()
+        raise HTTPException(status_code=422, detail={"errors": {"body": [err_str]}})
+    if get_user_by_email(email, ctx.storage) or get_user_by_username(username, ctx.storage):
         log_structured(
-            http_logger,
-            logging.INFO,
-            "User followed",
-            "CRUD",
-            operation="follow_user",
-            follower_id=self.current_user_id,
-            followed_username=username,
-            followed_id=target_user["id"],
-            ip=client_ip,
+            auth_logger,
+            logging.WARNING,
+            "Registration failed: user already exists",
+            ip=ctx.client_ip,
+            email=email,
+            username=username,
         )
-        return self._send_response_with_timing(
-            200, {"profile": create_profile_response(target_user, storage, self.current_user_id)}
-        )
+        raise HTTPException(status_code=409, detail={"errors": {"body": ["User already exists"]}})
+    user = {
+        "email": email,
+        "username": username,
+        "password": hash_password(password),
+        "bio": "",
+        "image": DEMO_DATA_DEFAULT_IMAGE,
+        "createdAt": get_current_time(),
+    }
+    user = ctx.storage.users.add(user)
+    token = generate_token(user["id"])
+    storage_container.bind_jwt_to_session_id(token, ctx.session_id)
+    user["token"] = token
+    log_structured(
+        auth_logger,
+        logging.INFO,
+        "User registered successfully",
+        ip=ctx.client_ip,
+        email=email,
+        username=username,
+        user_id=user["id"],
+    )
+    return {"user": create_user_response(user)}
 
-    @_require_auth
-    def _handle_unfollow_user(self, storage: InMemoryStorage, username: str):
-        """DELETE /profiles/{username}/follow - Unfollow user"""
-        target_user = get_user_by_username(username, storage)
-        if not target_user:
-            return self._send_error(404, {"errors": {"body": ["Profile not found"]}})
-        storage.follows.remove(self.current_user_id, target_user["id"])
-        # Log successful unfollow operation
-        client_ip = self._get_client_ip()
-        log_structured(
-            http_logger,
-            logging.INFO,
-            "User unfollowed",
-            "CRUD",
-            operation="unfollow_user",
-            follower_id=self.current_user_id,
-            unfollowed_username=username,
-            unfollowed_id=target_user["id"],
-            ip=client_ip,
-        )
-        return self._send_response_with_timing(
-            200, {"profile": create_profile_response(target_user, storage, self.current_user_id)}
-        )
 
-    # Article endpoints
-
-    def _handle_list_articles(self, storage: InMemoryStorage, query_params: Dict):
-        """GET /articles - List articles"""
-        tag = query_params.get("tag", [None])[0]
-        author = query_params.get("author", [None])[0]
-        favorited = query_params.get("favorited", [None])[0]
-        limit = int(query_params.get("limit", [20])[0])
-        offset = int(query_params.get("offset", [0])[0])
-        articles = list(storage.articles.values())
-        # Filter by tag
-        if tag:
-            articles = [a for a in articles if tag in a["tagList"]]
-        # Filter by author
-        if author:
-            author_user = get_user_by_username(author, storage)
-            articles = [a for a in articles if a["author_id"] == author_user["id"]] if author_user else []
-        # Filter by favorited
-        if favorited:
-            favorited_user = get_user_by_username(favorited, storage)
-            if favorited_user:
-                favorited_article_ids = storage.favorites.targets_for_source(favorited_user["id"])
-                articles = [a for a in articles if a["id"] in favorited_article_ids]
-            else:
-                articles = []
-        # Sort by creation date (newest first)
-        articles.sort(key=lambda x: x["createdAt"], reverse=True)
-        # Apply pagination
-        total_count = len(articles)
-        articles = articles[offset : offset + limit]
-        # Format response
-        article_responses = [create_article_response(a, storage, self.current_user_id) for a in articles]
-        return self._send_response(200, {"articles": article_responses, "articlesCount": total_count})
-
-    @_require_auth
-    def _handle_articles_feed(self, storage: InMemoryStorage, query_params: Dict):
-        """GET /articles/feed - Get feed of followed users"""
-        limit = int(query_params.get("limit", [20])[0])
-        offset = int(query_params.get("offset", [0])[0])
-        followed_user_ids = storage.follows.targets_for_source(self.current_user_id)
-        articles = [a for a in storage.articles.values() if a["author_id"] in followed_user_ids]
-        # Sort by creation date (newest first)
-        articles.sort(key=lambda x: x["createdAt"], reverse=True)
-        # Apply pagination
-        total_count = len(articles)
-        articles = articles[offset : offset + limit]
-        # Format response
-        article_responses = [create_article_response(a, storage, self.current_user_id) for a in articles]
-        return self._send_response(200, {"articles": article_responses, "articlesCount": total_count})
-
-    def _helper_article_get_slug(self, storage, title):
-        """ensure slug is unique"""
-        slug = generate_slug(title)
-        base_slug = slug
-        counter = 1
-        while get_article_by_slug(slug, storage):
-            slug = f"{base_slug}-{counter}"
-            counter += 1
-        return slug
-
-    def _helper_article_field(self, source_dict, name, max_len):
-        """returns response if there is an error, None otherwise"""
-        if name not in source_dict:
-            return None
-        if type(source_dict[name]) is not str or len(source_dict[name]) > max_len:
-            err_str = f"{name} is an optional string of length <= {max_len}"
-            return self._send_error(422, {"errors": {"body": [err_str]}})
-        return None
-
-    @_require_auth
-    def _handle_create_article(self, storage: InMemoryStorage):
-        """POST /articles - Create article"""
-        data = self._get_request_body()
-        article_data = data.get("article", {})
-        title = article_data.get("title")
-        description = article_data.get("description")
-        body = article_data.get("body")
-        if not all([title, description, body]):
-            return self._send_error(422, {"errors": {"body": ["Title, description and body are required"]}})
-        error_response = (
-            self._helper_article_field(article_data, "title", MAX_LEN_ARTICLE_TITLE)
-            or self._helper_article_field(article_data, "description", MAX_LEN_ARTICLE_DESCRIPTION)
-            or self._helper_article_field(article_data, "body", MAX_LEN_ARTICLE_BODY)
-        )
-        if error_response:
-            return error_response
-        tag_list = article_data.get("tagList", [])
-        if (
-            type(tag_list) is not list
-            or len(tag_list) > MAX_LEN_ARTICLE_TAG_LIST
-            or any(type(e) is not str for e in tag_list)
-            or any(len(e) > MAX_LEN_ARTICLE_TAG_LEN for e in tag_list)
-        ):
-            err_str = f"tagList is an optional list of less than {MAX_LEN_ARTICLE_TAG_LIST} strings "
-            err_str += f"of less than {MAX_LEN_ARTICLE_TAG_LEN} chars"
-            return self._send_error(422, {"errors": {"body": [err_str]}})
-        slug = self._helper_article_get_slug(storage, title)
-        # Create article
-        current_time = get_current_time()
-        article = {
-            "slug": slug,
-            "title": title,
-            "description": description,
-            "body": body,
-            "tagList": sorted(tag_list),
-            "author_id": self.current_user_id,
-            "createdAt": current_time,
-            "updatedAt": current_time,
-        }
-        storage.articles.add(article)
-        # Log successful article creation
-        client_ip = self._get_client_ip()
-        log_structured(
-            http_logger,
-            logging.INFO,
-            "Article created",
-            "CRUD",
-            operation="create_article",
-            slug=article["slug"],
-            title=article["title"],
-            author_id=self.current_user_id,
-            article_id=article["id"],
-            ip=client_ip,
-        )
-        return self._send_response_with_timing(
-            201, {"article": create_article_response(article, storage, self.current_user_id)}
-        )
-
-    def _handle_get_article(self, storage: InMemoryStorage, slug: str):
-        """GET /articles/{slug} - Get article"""
-        article = get_article_by_slug(slug, storage)
-        if not article:
-            return self._send_error(404, {"errors": {"body": ["Article not found"]}})
-        return self._send_response(200, {"article": create_article_response(article, storage, self.current_user_id)})
-
-    @_require_auth
-    def _handle_update_article(self, storage: InMemoryStorage, slug: str):
-        """PUT /articles/{slug} - Update article"""
-        article = get_article_by_slug(slug, storage)
-        if not article:
-            return self._send_error(404, {"errors": {"body": ["Article not found"]}})
-        if article["author_id"] != self.current_user_id:
-            return self._send_error(403, {"errors": {"body": ["Forbidden"]}})
-        data = self._get_request_body()
-        article_data = data.get("article", {})
-        article_update = {}  # update this intermediary dict to prevent half-finished updates
-        # Update fields if provided
-        if "title" in article_data and article["title"] != article_data["title"]:  # additional check for slug
-            if error_response := self._helper_article_field(article_data, "title", MAX_LEN_ARTICLE_TITLE):
-                return error_response
-            article_update["title"] = article_data["title"]
-            article_update["slug"] = self._helper_article_get_slug(storage, article["title"])
-        if "description" in article_data:
-            if error_response := self._helper_article_field(article_data, "description", MAX_LEN_ARTICLE_DESCRIPTION):
-                return error_response
-            article_update["description"] = article_data["description"]
-        if "body" in article_data:
-            if error_response := self._helper_article_field(article_data, "body", MAX_LEN_ARTICLE_BODY):
-                return error_response
-            article_update["body"] = article_data["body"]
-        article_update["updatedAt"] = get_current_time()
-        article.update(**article_update)
-        # Log successful article update
-        client_ip = self._get_client_ip()
-        updated_fields = list(article_update.keys())
-        log_structured(
-            http_logger,
-            logging.INFO,
-            "Article updated",
-            "CRUD",
-            operation="update_article",
-            slug=slug,
-            updated_fields=updated_fields,
-            author_id=self.current_user_id,
-            article_id=article["id"],
-            ip=client_ip,
-        )
-        return self._send_response_with_timing(
-            200, {"article": create_article_response(article, storage, self.current_user_id)}
-        )
-
-    @_require_auth
-    def _handle_delete_article(self, storage: InMemoryStorage, slug: str):
-        """DELETE /articles/{slug} - Delete article"""
-        article = get_article_by_slug(slug, storage)
-        if not article:
-            return self._send_error(404, {"errors": {"body": ["Article not found"]}})
-        if article["author_id"] != self.current_user_id:
-            return self._send_error(403, {"errors": {"body": ["Forbidden"]}})
-        # Delete article and related data
-        article_id = article["id"]
-        storage.articles.delete(article_id)
-        # Remove from favorites
-        storage.favorites.delete_target(article_id)
-        # Delete comments
-        comments_to_delete = [c_id for c_id, c in storage.comments.items() if c["article_id"] == article_id]
-        for c_id in comments_to_delete:
-            storage.comments.delete(c_id)
-        # Log successful article deletion
-        client_ip = self._get_client_ip()
-        log_structured(
-            http_logger,
-            logging.INFO,
-            "Article deleted",
-            "CRUD",
-            operation="delete_article",
-            slug=slug,
-            article_id=article_id,
-            author_id=self.current_user_id,
-            deleted_comments_count=len(comments_to_delete),
-            ip=client_ip,
-        )
-        # Send 204 No Content
-        return self._send_response(204, None)
-
-    @_require_auth
-    def _handle_favorite_article(self, storage: InMemoryStorage, slug: str):
-        """POST /articles/{slug}/favorite - Favorite article"""
-        article = get_article_by_slug(slug, storage)
-        if not article:
-            return self._send_error(404, {"errors": {"body": ["Article not found"]}})
-        storage.favorites.add(self.current_user_id, article["id"])
-        return self._send_response(200, {"article": create_article_response(article, storage, self.current_user_id)})
-
-    @_require_auth
-    def _handle_unfavorite_article(self, storage: InMemoryStorage, slug: str):
-        """DELETE /articles/{slug}/favorite - Unfavorite article"""
-        article = get_article_by_slug(slug, storage)
-        if not article:
-            return self._send_error(404, {"errors": {"body": ["Article not found"]}})
-        storage.favorites.remove(self.current_user_id, article["id"])
-        return self._send_response(200, {"article": create_article_response(article, storage, self.current_user_id)})
-
-    # Comment endpoints
-
-    def _handle_get_comments(self, storage: InMemoryStorage, slug: str):
-        """GET /articles/{slug}/comments - Get comments"""
-        article = get_article_by_slug(slug, storage)
-        if not article:
-            return self._send_error(404, {"errors": {"body": ["Article not found"]}})
-        comments = [c for c in storage.comments.values() if c["article_id"] == article["id"]]
-        comments.sort(key=lambda x: x["createdAt"], reverse=True)
-        comment_responses = [create_comment_response(c, storage, self.current_user_id) for c in comments]
-        return self._send_response(200, {"comments": comment_responses})
-
-    @_require_auth
-    def _handle_create_comment(self, storage: InMemoryStorage, slug: str):
-        """POST /articles/{slug}/comments - Create comment"""
-        article = get_article_by_slug(slug, storage)
-        if not article:
-            return self._send_error(404, {"errors": {"body": ["Article not found"]}})
-        data = self._get_request_body()
-        comment_data = data.get("comment", {})
-        body = comment_data.get("body")
-        if not body:
-            return self._send_error(422, {"errors": {"body": ["Body is required"]}})
-        if type(body) is not str or len(body) > MAX_LEN_COMMENT_BODY:
-            return self._send_error(
-                422, {"errors": {"body": [f"Body is a string of less than {MAX_LEN_COMMENT_BODY} chars"]}}
+@app.post(f"{PATH_PREFIX}/users/login")
+def login(request: Request, ctx: Annotated[AuthContext, Depends(get_auth_context)]):
+    """POST /users/login - Login user"""
+    data = request.scope.get("_body_json", {})
+    user_data = data.get("user", {})
+    email = user_data.get("email")
+    password = user_data.get("password")
+    if not all([email, password]):
+        log_structured(auth_logger, logging.WARNING, "Login failed: missing fields", ip=ctx.client_ip, email=email)
+        raise HTTPException(status_code=422, detail={"errors": {"body": ["Email and password are required"]}})
+    hashed_password = hash_password(password)
+    user = get_user_by_email(email, ctx.storage)
+    target_session_id = ctx.session_id
+    target_storage = ctx.storage
+    if not user or user["password"] != hashed_password:
+        found_session_id, found_storage = storage_container.find_session_by_credentials(email, hashed_password)
+        if found_storage:
+            target_session_id = str(uuid.uuid4())
+            storage_container.push(time_ns(), target_session_id, data=found_storage, client_ip=ctx.client_ip)
+            target_storage = found_storage
+            user = get_user_by_email(email, target_storage)
+            log_structured(
+                auth_logger,
+                logging.INFO,
+                "Login: Created new session for existing user",
+                ip=ctx.client_ip,
+                email=email,
+                original_session_id=found_session_id,
+                new_session_id=target_session_id,
+                user_id=user["id"],
             )
-        # Create comment
-        current_time = get_current_time()
-        comment = {
-            "body": body,
-            "article_id": article["id"],
-            "author_id": self.current_user_id,
-            "createdAt": current_time,
-            "updatedAt": current_time,
-        }
-        storage.comments.add(comment)
-        # Log successful comment creation
-        client_ip = self._get_client_ip()
-        log_structured(
-            http_logger,
-            logging.INFO,
-            "Comment created",
-            "CRUD",
-            operation="create_comment",
-            comment_id=comment["id"],
-            slug=slug,
-            author_id=self.current_user_id,
-            article_id=article["id"],
-            ip=client_ip,
-        )
-        return self._send_response_with_timing(
-            200, {"comment": create_comment_response(comment, storage, self.current_user_id)}
-        )
+        else:
+            log_structured(
+                auth_logger, logging.WARNING, "Login failed: invalid credentials", ip=ctx.client_ip, email=email
+            )
+            raise HTTPException(status_code=401, detail={"errors": {"body": ["Invalid credentials"]}})
+    user["token"] = generate_token(user["id"])
+    storage_container.bind_jwt_to_session_id(user["token"], target_session_id)
+    log_structured(
+        auth_logger,
+        logging.INFO,
+        "User logged in successfully",
+        ip=ctx.client_ip,
+        email=email,
+        username=user.get("username"),
+        user_id=user["id"],
+    )
+    return {"user": create_user_response(user)}
 
-    @_require_auth
-    def _handle_delete_comment(self, storage: InMemoryStorage, slug: str, comment_id: int):
-        """DELETE /articles/{slug}/comments/{id} - Delete comment"""
-        article = get_article_by_slug(slug, storage)
-        if not article:
-            return self._send_error(404, {"errors": {"body": ["Article not found"]}})
-        comment = storage.comments.get(comment_id)
-        if not comment or comment["article_id"] != article["id"]:
-            return self._send_error(404, {"errors": {"body": ["Comment not found"]}})
-        # Only comment author or article author can delete
-        if comment["author_id"] != self.current_user_id and article["author_id"] != self.current_user_id:
-            return self._send_error(403, {"errors": {"body": ["Forbidden"]}})
-        storage.comments.delete(comment_id)
-        # Log successful comment deletion
-        client_ip = self._get_client_ip()
-        log_structured(
-            http_logger,
-            logging.INFO,
-            "Comment deleted",
-            "CRUD",
-            operation="delete_comment",
-            comment_id=comment_id,
-            slug=slug,
-            deleted_by_user_id=self.current_user_id,
-            article_id=article["id"],
-            ip=client_ip,
-        )
-        # Send 204 No Content
-        return self._send_response(204, None)
 
-    # Tag endpoints
+@app.get(f"{PATH_PREFIX}/user")
+def get_current_user(ctx: Annotated[AuthContext, Depends(get_auth_context)]):
+    """GET /user - Get current user"""
+    require_auth(ctx)
+    user = ctx.storage.users.get(ctx.current_user_id)
+    return {"user": create_user_response(user)}
 
-    def _handle_get_tags(self, storage: InMemoryStorage):
-        """GET /tags - Get all tags"""
-        return self._send_response_with_timing(
-            200, {"tags": sorted({t for a in storage.articles.values() for t in a.get("tagList", [])})}
+
+@app.put(f"{PATH_PREFIX}/user")
+def update_user(request: Request, ctx: Annotated[AuthContext, Depends(get_auth_context)]):
+    """PUT /user - Update current user"""
+    require_auth(ctx)
+    user = ctx.storage.users.get(ctx.current_user_id)
+    data = request.scope.get("_body_json", {})
+    user_data = data.get("user", {})
+
+    # Helper to update fields
+    def update_field(name, max_len):
+        if name in user_data:
+            value = user_data[name]
+            if type(value) is not str or len(value) > max_len:
+                raise HTTPException(
+                    status_code=422, detail={"errors": {"body": [f"{name} is a string of less than {max_len} chars"]}}
+                )
+            user[name] = value
+
+    update_field("email", MAX_LEN_USER_EMAIL)
+    update_field("username", MAX_LEN_USER_USERNAME)
+    update_field("bio", MAX_LEN_USER_BIO)
+    update_field("image", MAX_LEN_USER_IMAGE)
+    if "password" in user_data:
+        pw = user_data["password"]
+        if type(pw) is not str or len(pw) > MAX_LEN_USER_PASSWORD:
+            raise HTTPException(
+                status_code=422,
+                detail={"errors": {"body": [f"password is a string of less than {MAX_LEN_USER_PASSWORD} chars"]}},
+            )
+        user["password"] = hash_password(pw)
+    return {"user": create_user_response(user)}
+
+
+# Profile endpoints
+@app.get(f"{PATH_PREFIX}/profiles/{{username}}")
+def get_profile(username: str, ctx: Annotated[AuthContext, Depends(get_auth_context)]):
+    """GET /profiles/{username} - Get profile"""
+    user = get_user_by_username(username, ctx.storage)
+    if not user:
+        raise HTTPException(status_code=404, detail={"errors": {"body": ["Profile not found"]}})
+    return {"profile": create_profile_response(user, ctx.storage, ctx.current_user_id)}
+
+
+@app.post(f"{PATH_PREFIX}/profiles/{{username}}/follow")
+def follow_user(username: str, ctx: Annotated[AuthContext, Depends(get_auth_context)]):
+    """POST /profiles/{username}/follow - Follow user"""
+    require_auth(ctx)
+    user = get_user_by_username(username, ctx.storage)
+    if not user:
+        raise HTTPException(status_code=404, detail={"errors": {"body": ["Profile not found"]}})
+    ctx.storage.follows.add(ctx.current_user_id, user["id"])
+    return {"profile": create_profile_response(user, ctx.storage, ctx.current_user_id)}
+
+
+@app.delete(f"{PATH_PREFIX}/profiles/{{username}}/follow")
+def unfollow_user(username: str, ctx: Annotated[AuthContext, Depends(get_auth_context)]):
+    """DELETE /profiles/{username}/follow - Unfollow user"""
+    require_auth(ctx)
+    user = get_user_by_username(username, ctx.storage)
+    if not user:
+        raise HTTPException(status_code=404, detail={"errors": {"body": ["Profile not found"]}})
+    ctx.storage.follows.remove(ctx.current_user_id, user["id"])
+    return {"profile": create_profile_response(user, ctx.storage, ctx.current_user_id)}
+
+
+# Article endpoints
+@app.get(f"{PATH_PREFIX}/articles")
+def list_articles(
+    ctx: Annotated[AuthContext, Depends(get_auth_context)],
+    tag: str | None = None,
+    author: str | None = None,
+    favorited: str | None = None,
+    limit: int = 20,
+    offset: int = 0,
+):
+    """GET /articles - List articles"""
+    articles = list(ctx.storage.articles.values())
+    if tag:
+        articles = [a for a in articles if tag in a.get("tagList", [])]
+    if author:
+        author_user = get_user_by_username(author, ctx.storage)
+        if author_user:
+            articles = [a for a in articles if a["author_id"] == author_user["id"]]
+        else:
+            articles = []
+    if favorited:
+        fav_user = get_user_by_username(favorited, ctx.storage)
+        if fav_user:
+            fav_article_ids = ctx.storage.favorites.targets_for_source(fav_user["id"])
+            articles = [a for a in articles if a["id"] in fav_article_ids]
+        else:
+            articles = []
+    articles.sort(key=lambda x: x["createdAt"], reverse=True)
+    articles = articles[offset : offset + limit]
+    return {
+        "articles": [create_article_response(a, ctx.storage, ctx.current_user_id) for a in articles],
+        "articlesCount": len(articles),
+    }
+
+
+@app.get(f"{PATH_PREFIX}/articles/feed")
+def get_feed(ctx: Annotated[AuthContext, Depends(get_auth_context)], limit: int = 20, offset: int = 0):
+    """GET /articles/feed - Get feed"""
+    require_auth(ctx)
+    followed_ids = ctx.storage.follows.targets_for_source(ctx.current_user_id)
+    articles = [a for a in ctx.storage.articles.values() if a["author_id"] in followed_ids]
+    articles.sort(key=lambda x: x["createdAt"], reverse=True)
+    articles = articles[offset : offset + limit]
+    return {
+        "articles": [create_article_response(a, ctx.storage, ctx.current_user_id) for a in articles],
+        "articlesCount": len(articles),
+    }
+
+
+@app.post(f"{PATH_PREFIX}/articles", status_code=201)
+def create_article(request: Request, ctx: Annotated[AuthContext, Depends(get_auth_context)]):
+    """POST /articles - Create article"""
+    require_auth(ctx)
+    data = request.scope.get("_body_json", {})
+    article_data = data.get("article", {})
+    title = article_data.get("title")
+    description = article_data.get("description")
+    body = article_data.get("body")
+    if not all([title, description, body]):
+        raise HTTPException(status_code=422, detail={"errors": {"body": ["Title, description and body are required"]}})
+    for name, value, max_len in [
+        ("title", title, MAX_LEN_ARTICLE_TITLE),
+        ("description", description, MAX_LEN_ARTICLE_DESCRIPTION),
+        ("body", body, MAX_LEN_ARTICLE_BODY),
+    ]:
+        if type(value) is not str or len(value) > max_len:
+            raise HTTPException(
+                status_code=422, detail={"errors": {"body": [f"{name} is a string of less than {max_len} chars"]}}
+            )
+    tag_list = article_data.get("tagList", [])
+    if (
+        type(tag_list) is not list
+        or len(tag_list) > MAX_LEN_ARTICLE_TAG_LIST
+        or any(type(e) is not str for e in tag_list)
+        or any(len(e) > MAX_LEN_ARTICLE_TAG_LEN for e in tag_list)
+    ):
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "errors": {
+                    "body": [
+                        f"tagList is an optional list of less than {MAX_LEN_ARTICLE_TAG_LIST} strings of less than {MAX_LEN_ARTICLE_TAG_LEN} chars"
+                    ]
+                }
+            },
         )
+    # Generate slug
+    base_slug = re.sub(r"[^\w\s-]", "", title.lower()).replace(" ", "-")[:50]
+    slug = base_slug
+    counter = 1
+    while get_article_by_slug(slug, ctx.storage):
+        slug = f"{base_slug}-{counter}"
+        counter += 1
+    current_time = get_current_time()
+    article = {
+        "slug": slug,
+        "title": title,
+        "description": description,
+        "body": body,
+        "tagList": sorted(tag_list),
+        "author_id": ctx.current_user_id,
+        "createdAt": current_time,
+        "updatedAt": current_time,
+    }
+    ctx.storage.articles.add(article)
+    log_structured(
+        http_logger,
+        logging.INFO,
+        "Article created",
+        "CRUD",
+        operation="create_article",
+        slug=slug,
+        title=title,
+        author_id=ctx.current_user_id,
+        article_id=article["id"],
+        ip=ctx.client_ip,
+    )
+    return {"article": create_article_response(article, ctx.storage, ctx.current_user_id)}
+
+
+@app.get(f"{PATH_PREFIX}/articles/{{slug}}")
+def get_article(slug: str, ctx: Annotated[AuthContext, Depends(get_auth_context)]):
+    """GET /articles/{slug} - Get article"""
+    article = get_article_by_slug(slug, ctx.storage)
+    if not article:
+        raise HTTPException(status_code=404, detail={"errors": {"body": ["Article not found"]}})
+    return {"article": create_article_response(article, ctx.storage, ctx.current_user_id)}
+
+
+@app.put(f"{PATH_PREFIX}/articles/{{slug}}")
+def update_article(slug: str, request: Request, ctx: Annotated[AuthContext, Depends(get_auth_context)]):
+    """PUT /articles/{slug} - Update article"""
+    require_auth(ctx)
+    article = get_article_by_slug(slug, ctx.storage)
+    if not article:
+        raise HTTPException(status_code=404, detail={"errors": {"body": ["Article not found"]}})
+    if article["author_id"] != ctx.current_user_id:
+        raise HTTPException(status_code=403, detail={"errors": {"body": ["Forbidden"]}})
+    data = request.scope.get("_body_json", {})
+    article_data = data.get("article", {})
+    if "title" in article_data and article["title"] != article_data["title"]:
+        title = article_data["title"]
+        if type(title) is not str or len(title) > MAX_LEN_ARTICLE_TITLE:
+            raise HTTPException(
+                status_code=422,
+                detail={"errors": {"body": [f"title is a string of less than {MAX_LEN_ARTICLE_TITLE} chars"]}},
+            )
+        article["title"] = title
+        base_slug = re.sub(r"[^\w\s-]", "", title.lower()).replace(" ", "-")[:50]
+        new_slug = base_slug
+        counter = 1
+        while get_article_by_slug(new_slug, ctx.storage) and new_slug != slug:
+            new_slug = f"{base_slug}-{counter}"
+            counter += 1
+        article["slug"] = new_slug
+    for name, max_len in [("description", MAX_LEN_ARTICLE_DESCRIPTION), ("body", MAX_LEN_ARTICLE_BODY)]:
+        if name in article_data:
+            value = article_data[name]
+            if type(value) is not str or len(value) > max_len:
+                raise HTTPException(
+                    status_code=422, detail={"errors": {"body": [f"{name} is a string of less than {max_len} chars"]}}
+                )
+            article[name] = value
+    article["updatedAt"] = get_current_time()
+    return {"article": create_article_response(article, ctx.storage, ctx.current_user_id)}
+
+
+@app.delete(f"{PATH_PREFIX}/articles/{{slug}}", status_code=204)
+def delete_article(slug: str, ctx: Annotated[AuthContext, Depends(get_auth_context)]):
+    """DELETE /articles/{slug} - Delete article"""
+    require_auth(ctx)
+    article = get_article_by_slug(slug, ctx.storage)
+    if not article:
+        raise HTTPException(status_code=404, detail={"errors": {"body": ["Article not found"]}})
+    if article["author_id"] != ctx.current_user_id:
+        raise HTTPException(status_code=403, detail={"errors": {"body": ["Forbidden"]}})
+    article_id = article["id"]
+    ctx.storage.articles.delete(article_id)
+    ctx.storage.favorites.delete_target(article_id)
+    comments_to_delete = [c_id for c_id, c in ctx.storage.comments.items() if c["article_id"] == article_id]
+    for c_id in comments_to_delete:
+        ctx.storage.comments.delete(c_id)
+    log_structured(
+        http_logger,
+        logging.INFO,
+        "Article deleted",
+        "CRUD",
+        operation="delete_article",
+        slug=slug,
+        article_id=article_id,
+        author_id=ctx.current_user_id,
+        deleted_comments_count=len(comments_to_delete),
+        ip=ctx.client_ip,
+    )
+    return Response(status_code=204)
+
+
+@app.post(f"{PATH_PREFIX}/articles/{{slug}}/favorite")
+def favorite_article(slug: str, ctx: Annotated[AuthContext, Depends(get_auth_context)]):
+    """POST /articles/{slug}/favorite - Favorite article"""
+    require_auth(ctx)
+    article = get_article_by_slug(slug, ctx.storage)
+    if not article:
+        raise HTTPException(status_code=404, detail={"errors": {"body": ["Article not found"]}})
+    ctx.storage.favorites.add(ctx.current_user_id, article["id"])
+    return {"article": create_article_response(article, ctx.storage, ctx.current_user_id)}
+
+
+@app.delete(f"{PATH_PREFIX}/articles/{{slug}}/favorite")
+def unfavorite_article(slug: str, ctx: Annotated[AuthContext, Depends(get_auth_context)]):
+    """DELETE /articles/{slug}/favorite - Unfavorite article"""
+    require_auth(ctx)
+    article = get_article_by_slug(slug, ctx.storage)
+    if not article:
+        raise HTTPException(status_code=404, detail={"errors": {"body": ["Article not found"]}})
+    ctx.storage.favorites.remove(ctx.current_user_id, article["id"])
+    return {"article": create_article_response(article, ctx.storage, ctx.current_user_id)}
+
+
+# Comment endpoints
+@app.get(f"{PATH_PREFIX}/articles/{{slug}}/comments")
+def get_comments(slug: str, ctx: Annotated[AuthContext, Depends(get_auth_context)]):
+    """GET /articles/{slug}/comments - Get comments"""
+    article = get_article_by_slug(slug, ctx.storage)
+    if not article:
+        raise HTTPException(status_code=404, detail={"errors": {"body": ["Article not found"]}})
+    comments = [c for c in ctx.storage.comments.values() if c["article_id"] == article["id"]]
+    comments.sort(key=lambda x: x["createdAt"], reverse=True)
+    return {"comments": [create_comment_response(c, ctx.storage, ctx.current_user_id) for c in comments]}
+
+
+@app.post(f"{PATH_PREFIX}/articles/{{slug}}/comments")
+def create_comment(slug: str, request: Request, ctx: Annotated[AuthContext, Depends(get_auth_context)]):
+    """POST /articles/{slug}/comments - Create comment"""
+    require_auth(ctx)
+    article = get_article_by_slug(slug, ctx.storage)
+    if not article:
+        raise HTTPException(status_code=404, detail={"errors": {"body": ["Article not found"]}})
+    data = request.scope.get("_body_json", {})
+    comment_data = data.get("comment", {})
+    body = comment_data.get("body")
+    if not body:
+        raise HTTPException(status_code=422, detail={"errors": {"body": ["Body is required"]}})
+    if type(body) is not str or len(body) > MAX_LEN_COMMENT_BODY:
+        raise HTTPException(
+            status_code=422,
+            detail={"errors": {"body": [f"Body is a string of less than {MAX_LEN_COMMENT_BODY} chars"]}},
+        )
+    current_time = get_current_time()
+    comment = {
+        "body": body,
+        "article_id": article["id"],
+        "author_id": ctx.current_user_id,
+        "createdAt": current_time,
+        "updatedAt": current_time,
+    }
+    ctx.storage.comments.add(comment)
+    log_structured(
+        http_logger,
+        logging.INFO,
+        "Comment created",
+        "CRUD",
+        operation="create_comment",
+        comment_id=comment["id"],
+        slug=slug,
+        author_id=ctx.current_user_id,
+        article_id=article["id"],
+        ip=ctx.client_ip,
+    )
+    return {"comment": create_comment_response(comment, ctx.storage, ctx.current_user_id)}
+
+
+@app.delete(f"{PATH_PREFIX}/articles/{{slug}}/comments/{{comment_id}}", status_code=204)
+def delete_comment(slug: str, comment_id: int, ctx: Annotated[AuthContext, Depends(get_auth_context)]):
+    """DELETE /articles/{slug}/comments/{id} - Delete comment"""
+    require_auth(ctx)
+    article = get_article_by_slug(slug, ctx.storage)
+    if not article:
+        raise HTTPException(status_code=404, detail={"errors": {"body": ["Article not found"]}})
+    comment = ctx.storage.comments.get(comment_id)
+    if not comment or comment["article_id"] != article["id"]:
+        raise HTTPException(status_code=404, detail={"errors": {"body": ["Comment not found"]}})
+    if comment["author_id"] != ctx.current_user_id and article["author_id"] != ctx.current_user_id:
+        raise HTTPException(status_code=403, detail={"errors": {"body": ["Forbidden"]}})
+    ctx.storage.comments.delete(comment_id)
+    log_structured(
+        http_logger,
+        logging.INFO,
+        "Comment deleted",
+        "CRUD",
+        operation="delete_comment",
+        comment_id=comment_id,
+        slug=slug,
+        deleted_by_user_id=ctx.current_user_id,
+        article_id=article["id"],
+        ip=ctx.client_ip,
+    )
+    return Response(status_code=204)
+
+
+# Tag endpoints
+@app.get(f"{PATH_PREFIX}/tags")
+def get_tags(ctx: Annotated[AuthContext, Depends(get_auth_context)]):
+    """GET /tags - Get all tags"""
+    return {"tags": sorted({t for a in ctx.storage.articles.values() for t in a.get("tagList", [])})}
+
+
+# Middleware to parse JSON body
+@app.middleware("http")
+async def parse_json_body(request: Request, call_next):
+    """Parse JSON body and store in request scope."""
+    if request.method in ["POST", "PUT", "PATCH"]:
+        try:
+            body = await request.body()
+            if body:
+                request.scope["_body_json"] = json.loads(body)
+            else:
+                request.scope["_body_json"] = {}
+        except json.JSONDecodeError:
+            request.scope["_body_json"] = {}
+    response = await call_next(request)
+    return response
 
 
 def run_server(port: int = 8000):
-    """Run the RealWorld API server"""
-    load_data()  # will load data if temp file found
+    """Run the RealWorld API server with uvicorn"""
+    import uvicorn
+
     # Log server startup
     log_structured(lifecycle_logger, logging.INFO, "RealWorld API Server starting", port=port)
     # Log security configuration
@@ -2053,42 +1856,14 @@ def run_server(port: int = 8000):
         log_file=bool(LOG_FILE),
         log_file_path=LOG_FILE,
     )
-    # Create WSGI application
-    app = RealWorldHandler()
 
-    # Document routes - using print here
+    # Document routes
     print(f"RealWorld API Server running on http://localhost:{port}")
-    print("API endpoints available:")
-    print("  POST   /users  -------------------------- Register")
-    print("  POST   /users/login  -------------------- Login")
-    print("  GET    /user  --------------------------- Current user")
-    print("  PUT    /user  --------------------------- Update user")
-    print("  GET    /profiles/{username}  ------------ Get profile")
-    print("  POST   /profiles/{username}/follow  ----- Follow user")
-    print("  DELETE /profiles/{username}/follow  ----- Unfollow user")
-    print("  GET    /articles  ----------------------- List articles")
-    print("  GET    /articles/feed  ------------------ Get feed")
-    print("  POST   /articles  ----------------------- Create article")
-    print("  GET    /articles/{slug}  ---------------- Get article")
-    print("  PUT    /articles/{slug}  ---------------- Update article")
-    print("  DELETE /articles/{slug}  ---------------- Delete article")
-    print("  POST   /articles/{slug}/favorite  ------- Favorite article")
-    print("  DELETE /articles/{slug}/favorite  ------- Unfavorite article")
-    print("  GET    /articles/{slug}/comments  ------- Get comments")
-    print("  POST   /articles/{slug}/comments  ------- Create comment")
-    print("  DELETE /articles/{slug}/comments/{id}  -- Delete comment")
-    print("  GET    /tags  --------------------------- Get tags")
+    print(f"OpenAPI docs available at http://localhost:{port}/docs")
     print("\nPress Ctrl+C to stop the server")
-    # Serve with waitress
-    try:
-        serve(app, host="0.0.0.0", port=port, threads=1)
-    except KeyboardInterrupt:
-        log_structured(lifecycle_logger, logging.INFO, "shutting down server")
-        if DATA_FILE_PATH:
-            log_structured(lifecycle_logger, logging.INFO, "trying to save data")
-            did_save = save_data()
-            log_structured(lifecycle_logger, logging.INFO, "saved data" if did_save else "couldn't save data")
-        log_structured(lifecycle_logger, logging.INFO, "process terminating now")
+
+    # Run with uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=port, log_level="warning")
 
 
 def calculate_memory():
@@ -3313,7 +3088,7 @@ class TestStorageContainer(TestCase):
         self.container._handle_client_ip_and_session_addition(final_session, "192.168.1.1")
         # Verify the session was added and the first session was deleted
         self.assertIn(final_session, self.container.ip_to_sessions["192.168.1.1"])
-        self.assertEqual(self.container.ip_to_sessions, {"192.168.1.1": [f"session{i}" for i in range(1, 31)]})
+        self.assertEqual(self.container.ip_to_sessions, {"192.168.1.1": [f"session{i}" for i in range(1, 11)]})
 
     def test_handle_client_ip_and_session_addition_exceeds_max_sessions_by_multiple(self):
         """Test addition that exceeds MAX_SESSIONS_PER_IP by multiple"""
@@ -3329,7 +3104,7 @@ class TestStorageContainer(TestCase):
         self.container._handle_client_ip_and_session_addition(final_session, "192.168.1.1")
         # Verify the session was added and the first session was deleted
         self.assertIn(final_session, self.container.ip_to_sessions["192.168.1.1"])
-        self.assertEqual(self.container.ip_to_sessions, {"192.168.1.1": [f"session{i}" for i in range(5, 35)]})
+        self.assertEqual(self.container.ip_to_sessions, {"192.168.1.1": [f"session{i}" for i in range(5, 15)]})
 
     def test_handle_client_ip_and_session_addition_ipv6_normalization(self):
         """Test addition with IPv6 address normalization"""
