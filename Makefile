@@ -5,6 +5,7 @@
 .PHONY: lint lint-check
 
 PYTHON = uvx --with fastapi --with uvicorn python
+PORT ?= 8000
 
 ########################
 # Help
@@ -24,10 +25,10 @@ help:
 # Run
 
 run-dummy-for-prod:
-	PATH_PREFIX=/api $(PYTHON) realworld_dummy_server.py
+	PATH_PREFIX=/api $(PYTHON) realworld_dummy_server.py $(PORT)
 
 run-dummy-for-postman:
-	PATH_PREFIX=/api DISABLE_ISOLATION_MODE=True $(PYTHON) realworld_dummy_server.py
+	PATH_PREFIX=/api DISABLE_ISOLATION_MODE=True $(PYTHON) realworld_dummy_server.py $(PORT)
 
 ########################
 # Tests
