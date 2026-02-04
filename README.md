@@ -1,5 +1,5 @@
 # realworld-demo-deploy
-*Deploying the demo for [RealWorld](https://github.com/gothinkster/realworld)*
+*Deploying the demo for [RealWorld](https://github.com/realworld-apps/realworld)*
 
 ---
 
