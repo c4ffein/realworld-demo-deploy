@@ -29,6 +29,8 @@ jobs:
         npm install -g newman
     - name: Verify Newman installation
       run: newman --version
+    - name: Pre-fetch uvx dependencies
+      run: uvx --with fastapi --with uvicorn python -c "print('deps ready')"
     - name: Run Tests
       run: |
         make test-dummy-server-api-with-postman
