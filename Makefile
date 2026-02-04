@@ -45,6 +45,7 @@ test-dummy-server-api-with-postman-and-already-launched-server:
 
 test-dummy-server-api-with-postman:
 	@set -e; \
+	$(PYTHON) -c "print('deps ready')"; \
 	PATH_PREFIX=/api DISABLE_ISOLATION_MODE=True $(PYTHON) realworld_dummy_server.py & \
 	SERVER_PID=$$!; \
 	trap "kill $$SERVER_PID 2>/dev/null || true" EXIT; \
