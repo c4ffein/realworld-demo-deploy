@@ -72,8 +72,8 @@ PATH_PREFIX = getenv("PATH_PREFIX", "")
 PATH_PREFIX_PARTS = PATH_PREFIX.strip("/").split("/")
 # security
 DISABLE_ISOLATION_MODE = getenv("DISABLE_ISOLATION_MODE", "FALSE").lower() == "true"
-MAX_SESSIONS = int(getenv("MAX_SESSIONS") or 3000)
-MAX_SESSIONS_PER_IP = int(getenv("MAX_SESSIONS_PER_IP") or 30)
+MAX_SESSIONS = int(getenv("MAX_SESSIONS") or 30000)
+MAX_SESSIONS_PER_IP = int(getenv("MAX_SESSIONS_PER_IP") or 10)
 # client ip detection
 CLIENT_IP_HEADER = getenv("CLIENT_IP_HEADER")  # Optional header name for client IP detection
 # logging
@@ -85,7 +85,7 @@ LOG_BACKUP_COUNT = int(getenv("LOG_BACKUP_COUNT", 5))
 DATA_FILE_PATH = (lambda path: Path(path) if path else None)(getenv("DATA_FILE_PATH"))
 # max lengths for keys and objects per session
 MAX_ID_LEN = int(getenv("MAX_ID_LEN", 64))
-MAX_USERS_PER_SESSION = int(getenv("MAX_USERS_PER_SESSION", 60))
+MAX_USERS_PER_SESSION = int(getenv("MAX_USERS_PER_SESSION", 6))
 MAX_ARTICLES_PER_SESSION = int(getenv("MAX_ARTICLES_PER_SESSION", 20))
 MAX_COMMENTS_PER_SESSION = int(getenv("MAX_COMMENTS_PER_SESSION", 20))
 MAX_FOLLOWS_PER_SESSION = int(getenv("MAX_FOLLOWS_PER_SESSION", 100))
@@ -2091,11 +2091,43 @@ def run_server(port: int = 8000):
         log_structured(lifecycle_logger, logging.INFO, "process terminating now")
 
 
+def calculate_memory():
+    """Print memory estimates based on current config."""
+    print(f"NAIVE_SIZE_USER:            {NAIVE_SIZE_USER:,}        # max bytes per user")
+    print(f"NAIVE_SIZE_TAG:             {NAIVE_SIZE_TAG:,}         # max bytes per tag list")
+    print(f"NAIVE_SIZE_ARTICLE:         {NAIVE_SIZE_ARTICLE:,}     # max bytes per article")
+    print(f"NAIVE_SIZE_COMMENT:         {NAIVE_SIZE_COMMENT:,}      # max bytes per comment")
+    print(
+        f"NAIVE_SIZE_SESSION_USER:    {NAIVE_SIZE_SESSION_USER:,}      "
+        "# users per session ({NAIVE_SIZE_USER} × {MAX_USERS_PER_SESSION})"
+    )
+    print(
+        f"NAIVE_SIZE_SESSION_ARTICLE: {NAIVE_SIZE_SESSION_ARTICLE:,}    "
+        "# articles per session ({NAIVE_SIZE_ARTICLE} × {MAX_ARTICLES_PER_SESSION})"
+    )
+    print(
+        f"NAIVE_SIZE_SESSION_COMMENT: {NAIVE_SIZE_SESSION_COMMENT:,}     "
+        "# comments per session ({NAIVE_SIZE_COMMENT} × {MAX_COMMENTS_PER_SESSION})"
+    )
+    print(
+        f"NAIVE_SIZE_SESSION:         {NAIVE_SIZE_SESSION:,}    "
+        "# total per session ({NAIVE_SIZE_SESSION / 1024:.1f} KB)"
+    )
+    print(
+        f"NAIVE_SIZE_TOTAL:           {NAIVE_SIZE_TOTAL:,}  "
+        "# all sessions ({NAIVE_SIZE_TOTAL / 1024 / 1024:.1f} MB, "
+        "×2 overhead: {NAIVE_SIZE_TOTAL / 1024 / 1024 * 2:.1f} MB)"
+    )
+
+
 if __name__ == "__main__":
     import sys
 
-    port = int(sys.argv[1]) if len(sys.argv) > 1 else 8000
-    run_server(port)
+    if "--calculate-memory" in sys.argv or "-m" in sys.argv:
+        calculate_memory()
+    else:
+        port = int(sys.argv[1]) if len(sys.argv) > 1 else 8000
+        run_server(port)
 
 
 #### TESTS #############################################################################################################
