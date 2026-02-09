@@ -1268,8 +1268,8 @@ def create_user_response(user: Dict, include_token: bool = True) -> Dict:
     response = {
         "username": user["username"],
         "email": user["email"],
-        "bio": user.get("bio", ""),
-        "image": user.get("image", DEMO_DATA_DEFAULT_IMAGE),
+        "bio": user.get("bio"),
+        "image": user.get("image"),
     }
     if include_token:
         response["token"] = user.get("token", "")
@@ -1284,8 +1284,8 @@ def create_profile_response(user: Dict, storage: InMemoryStorage, current_user_i
 
     return {
         "username": user["username"],
-        "bio": user.get("bio", ""),
-        "image": user.get("image", DEMO_DATA_DEFAULT_IMAGE),
+        "bio": user.get("bio"),
+        "image": user.get("image"),
         "following": following,
     }
 
@@ -1374,8 +1374,8 @@ def register(request: Request, ctx: Annotated[AuthContext, Depends(get_auth_cont
         "email": email,
         "username": username,
         "password": hash_password(password),
-        "bio": "",
-        "image": DEMO_DATA_DEFAULT_IMAGE,
+        "bio": None,
+        "image": None,
         "createdAt": get_current_time(),
     }
     user = ctx.storage.users.add(user)
@@ -3505,8 +3505,8 @@ class TestStorageContainer(TestCase):
                 "email": "test@example.com",
                 "username": "testuser",
                 "password": "hashed_password_123",
-                "bio": "",
-                "image": "",
+                "bio": None,
+                "image": None,
             }
         )
         container.push(1, "session_1", data=storage, client_ip=None)
@@ -3525,8 +3525,8 @@ class TestStorageContainer(TestCase):
                 "email": "other@example.com",
                 "username": "otheruser",
                 "password": "other_password",
-                "bio": "",
-                "image": "",
+                "bio": None,
+                "image": None,
             }
         )
         container.push(1, "session_1", data=storage1, client_ip=None)
@@ -3537,8 +3537,8 @@ class TestStorageContainer(TestCase):
                 "email": "target@example.com",
                 "username": "targetuser",
                 "password": "hashed_password_456",
-                "bio": "",
-                "image": "",
+                "bio": None,
+                "image": None,
             }
         )
         container.push(2, "session_2", data=storage2, client_ip=None)
@@ -3558,8 +3558,8 @@ class TestStorageContainer(TestCase):
                 "email": "test@example.com",
                 "username": "testuser",
                 "password": "correct_password",
-                "bio": "",
-                "image": "",
+                "bio": None,
+                "image": None,
             }
         )
         container.push(1, "session_1", data=storage, client_ip=None)
@@ -3582,13 +3582,13 @@ class TestStorageContainer(TestCase):
         storage = InMemoryStorage()
         # Add multiple users
         storage.users.add(
-            {"email": "user1@example.com", "username": "user1", "password": "password1", "bio": "", "image": ""}
+            {"email": "user1@example.com", "username": "user1", "password": "password1", "bio": None, "image": None}
         )
         storage.users.add(
-            {"email": "user2@example.com", "username": "user2", "password": "password2", "bio": "", "image": ""}
+            {"email": "user2@example.com", "username": "user2", "password": "password2", "bio": None, "image": None}
         )
         storage.users.add(
-            {"email": "target@example.com", "username": "target", "password": "target_password", "bio": "", "image": ""}
+            {"email": "target@example.com", "username": "target", "password": "target_password", "bio": None, "image": None}
         )
         container.push(1, "session_1", data=storage, client_ip=None)
         # Search for specific user
@@ -3619,7 +3619,7 @@ class TestStorageContainer(TestCase):
                 "username": "shareduser",
                 "password": "hashed_password",
                 "bio": "Shared storage user",
-                "image": "",
+                "image": None,
             }
         )
         container.push(100, "session_a", data=storage_shared, client_ip=None)
