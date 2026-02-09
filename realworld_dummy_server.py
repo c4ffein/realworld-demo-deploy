@@ -1435,7 +1435,7 @@ def login(request: Request, ctx: Annotated[AuthContext, Depends(get_auth_context
             log_structured(
                 auth_logger, logging.WARNING, "Login failed: invalid credentials", ip=ctx.client_ip, email=email
             )
-            raise HTTPException(status_code=401, detail={"errors": {"body": ["Invalid credentials"]}})
+            raise HTTPException(status_code=401, detail={"errors": {"body": ["invalid credentials"]}})
     user["token"] = generate_token(user["id"])
     storage_container.bind_jwt_to_session_id(user["token"], target_session_id)
     log_structured(
