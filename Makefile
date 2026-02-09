@@ -3,6 +3,7 @@
 .PHONY: test-dummy-server-unittest
 .PHONY: submodules-fetch
 .PHONY: lint lint-check
+.PHONY: compare-openapi compare-openapi-json compare-openapi-markdown
 
 PYTHON = uvx --with fastapi --with uvicorn python
 PORT ?= 8000
@@ -20,6 +21,9 @@ help:
 	@echo "  submodules-fetch"
 	@echo "  lint"
 	@echo "  lint-check"
+	@echo "  compare-openapi"
+	@echo "  compare-openapi-json"
+	@echo "  compare-openapi-markdown"
 
 ########################
 # Run
@@ -71,3 +75,15 @@ lint:
 
 lint-check:
 	uvx ruff check && uvx ruff format --line-length 120 --check
+
+########################
+# OpenAPI Comparison
+
+compare-openapi:
+	uvx --with fastapi --with uvicorn --with pyyaml --with httpx python compare_openapi.py
+
+compare-openapi-json:
+	uvx --with fastapi --with uvicorn --with pyyaml --with httpx python compare_openapi.py --format json
+
+compare-openapi-markdown:
+	uvx --with fastapi --with uvicorn --with pyyaml --with httpx python compare_openapi.py --format markdown
