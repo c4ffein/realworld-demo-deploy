@@ -20,15 +20,10 @@ jobs:
         python-version: 3.12
     - name: Set up uv
       uses: astral-sh/setup-uv@v5
-    - name: Setup Node.js
-      uses: actions/setup-node@v4
-      with:
-        node-version: "20"
+    - name: Setup Bun
+      uses: oven-sh/setup-bun@v2
     - name: Install Newman
-      run: |
-        npm install -g newman
-    - name: Verify Newman installation
-      run: newman --version
+      run: bun install --global newman
     - name: Run Tests
       run: |
         make test-dummy-server-api-with-postman

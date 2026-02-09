@@ -1545,10 +1545,11 @@ def list_articles(
         else:
             articles = []
     articles.sort(key=lambda x: x["createdAt"], reverse=True)
+    total = len(articles)
     articles = articles[offset : offset + limit]
     return {
         "articles": [create_article_response(a, ctx.storage, ctx.current_user_id) for a in articles],
-        "articlesCount": len(articles),
+        "articlesCount": total,
     }
 
 
@@ -1559,10 +1560,11 @@ def get_feed(ctx: Annotated[AuthContext, Depends(get_auth_context)], limit: int 
     followed_ids = ctx.storage.follows.targets_for_source(ctx.current_user_id)
     articles = [a for a in ctx.storage.articles.values() if a["author_id"] in followed_ids]
     articles.sort(key=lambda x: x["createdAt"], reverse=True)
+    total = len(articles)
     articles = articles[offset : offset + limit]
     return {
         "articles": [create_article_response(a, ctx.storage, ctx.current_user_id) for a in articles],
-        "articlesCount": len(articles),
+        "articlesCount": total,
     }
 
 
