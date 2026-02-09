@@ -1006,9 +1006,15 @@ VALIDATION_ERROR_RESPONSE = {
     "description": "Unexpected error",
     "content": {"application/json": {"schema": {"$ref": "#/components/schemas/GenericErrorModel"}}},
 }
+CONFLICT_RESPONSE = {
+    "description": "Conflict - resource already exists",
+    "content": {"application/json": {"schema": {"$ref": "#/components/schemas/GenericErrorModel"}}},
+}
 RESPONSES_401 = {401: UNAUTHORIZED_RESPONSE}
 RESPONSES_422 = {422: VALIDATION_ERROR_RESPONSE}
+RESPONSES_409_422 = {409: CONFLICT_RESPONSE, 422: VALIDATION_ERROR_RESPONSE}
 RESPONSES_401_422 = {401: UNAUTHORIZED_RESPONSE, 422: VALIDATION_ERROR_RESPONSE}
+RESPONSES_401_409_422 = {401: UNAUTHORIZED_RESPONSE, 409: CONFLICT_RESPONSE, 422: VALIDATION_ERROR_RESPONSE}
 
 
 # Dependencies
@@ -1330,7 +1336,7 @@ def create_comment_response(comment: Dict, storage: InMemoryStorage, current_use
 
 
 # Auth endpoints
-@app.post(f"{PATH_PREFIX}/users", status_code=201, responses=RESPONSES_422)
+@app.post(f"{PATH_PREFIX}/users", status_code=201, responses=RESPONSES_409_422)
 def register(request: Request, ctx: Annotated[AuthContext, Depends(get_auth_context)]):
     """POST /users - Register new user"""
     data = request.scope.get("_body_json", {})
@@ -1568,7 +1574,7 @@ def get_feed(ctx: Annotated[AuthContext, Depends(get_auth_context)], limit: int 
     }
 
 
-@app.post(f"{PATH_PREFIX}/articles", status_code=201, responses=RESPONSES_401_422)
+@app.post(f"{PATH_PREFIX}/articles", status_code=201, responses=RESPONSES_401_409_422)
 def create_article(request: Request, ctx: Annotated[AuthContext, Depends(get_auth_context)]):
     """POST /articles - Create article"""
     require_auth(ctx)
@@ -1605,13 +1611,10 @@ def create_article(request: Request, ctx: Annotated[AuthContext, Depends(get_aut
                 }
             },
         )
-    # Generate slug
-    base_slug = re.sub(r"[^\w\s-]", "", title.lower()).replace(" ", "-")[:50]
-    slug = base_slug
-    counter = 1
-    while get_article_by_slug(slug, ctx.storage):
-        slug = f"{base_slug}-{counter}"
-        counter += 1
+    # Generate slug – reject duplicates with 409
+    slug = re.sub(r"[^\w\s-]", "", title.lower()).replace(" ", "-")[:50]
+    if get_article_by_slug(slug, ctx.storage):
+        raise HTTPException(status_code=409, detail={"errors": {"body": ["Article with this title already exists"]}})
     current_time = get_current_time()
     article = {
         "slug": slug,
@@ -1667,12 +1670,10 @@ def update_article(slug: str, request: Request, ctx: Annotated[AuthContext, Depe
                 detail={"errors": {"body": [f"title is a string of less than {MAX_LEN_ARTICLE_TITLE} chars"]}},
             )
         article["title"] = title
-        base_slug = re.sub(r"[^\w\s-]", "", title.lower()).replace(" ", "-")[:50]
-        new_slug = base_slug
-        counter = 1
-        while get_article_by_slug(new_slug, ctx.storage) and new_slug != slug:
-            new_slug = f"{base_slug}-{counter}"
-            counter += 1
+        new_slug = re.sub(r"[^\w\s-]", "", title.lower()).replace(" ", "-")[:50]
+        existing = get_article_by_slug(new_slug, ctx.storage)
+        if existing and existing["id"] != article["id"]:
+            raise HTTPException(status_code=409, detail={"errors": {"body": ["Article with this title already exists"]}})
         article["slug"] = new_slug
     for name, max_len in [("description", MAX_LEN_ARTICLE_DESCRIPTION), ("body", MAX_LEN_ARTICLE_BODY)]:
         if name in article_data:
@@ -1750,7 +1751,7 @@ def get_comments(slug: str, ctx: Annotated[AuthContext, Depends(get_auth_context
     return {"comments": [create_comment_response(c, ctx.storage, ctx.current_user_id) for c in comments]}
 
 
-@app.post(f"{PATH_PREFIX}/articles/{{slug}}/comments", responses=RESPONSES_401)
+@app.post(f"{PATH_PREFIX}/articles/{{slug}}/comments", status_code=201, responses=RESPONSES_401)
 def create_comment(slug: str, request: Request, ctx: Annotated[AuthContext, Depends(get_auth_context)]):
     """POST /articles/{slug}/comments - Create comment"""
     require_auth(ctx)
