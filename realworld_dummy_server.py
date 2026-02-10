@@ -988,7 +988,10 @@ app.add_middleware(
 
 @app.exception_handler(HTTPException)
 async def http_exception_handler(request: Request, exc: HTTPException):
-    return JSONResponse(status_code=exc.status_code, content=exc.detail if isinstance(exc.detail, dict) else {"errors": {"body": [exc.detail]}})
+    return JSONResponse(
+        status_code=exc.status_code,
+        content=exc.detail if isinstance(exc.detail, dict) else {"errors": {"body": [exc.detail]}},
+    )
 
 
 # Security scheme for OpenAPI documentation
@@ -3620,7 +3623,13 @@ class TestStorageContainer(TestCase):
             {"email": "user2@example.com", "username": "user2", "password": "password2", "bio": None, "image": None}
         )
         storage.users.add(
-            {"email": "target@example.com", "username": "target", "password": "target_password", "bio": None, "image": None}
+            {
+                "email": "target@example.com",
+                "username": "target",
+                "password": "target_password",
+                "bio": None,
+                "image": None,
+            }
         )
         container.push(1, "session_1", data=storage, client_ip=None)
         # Search for specific user
