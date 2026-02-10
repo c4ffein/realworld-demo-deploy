@@ -7,6 +7,7 @@
 
 PYTHON = uvx --with fastapi --with uvicorn python
 PORT ?= 8000
+SERVER_STARTUP_WAIT ?= 1
 
 ########################
 # Help
@@ -53,7 +54,7 @@ test-dummy-server-api-with-postman:
 	PATH_PREFIX=/api DISABLE_ISOLATION_MODE=True $(PYTHON) realworld_dummy_server.py & \
 	SERVER_PID=$$!; \
 	trap "kill $$SERVER_PID 2>/dev/null || true" EXIT; \
-	sleep 1; \
+	sleep $(SERVER_STARTUP_WAIT); \
 	kill -0 "$$SERVER_PID" 2>/dev/null || exit 4; \
 	make test-dummy-server-api-with-postman-and-already-launched-server; \
 	kill $$SERVER_PID 2>/dev/null || true
