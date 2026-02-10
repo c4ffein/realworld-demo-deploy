@@ -61,6 +61,7 @@ from unittest import TestCase
 from unittest.mock import patch
 
 from fastapi import Depends, FastAPI, HTTPException, Path as PathParam, Request, Response, Security
+from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import APIKeyHeader
 
@@ -984,6 +985,12 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+
+@app.exception_handler(HTTPException)
+async def http_exception_handler(request: Request, exc: HTTPException):
+    return JSONResponse(status_code=exc.status_code, content=exc.detail if isinstance(exc.detail, dict) else {"errors": {"body": [exc.detail]}})
+
+
 # Security scheme for OpenAPI documentation
 token_scheme = APIKeyHeader(
     name="Authorization",
@@ -1070,7 +1077,7 @@ def require_auth(ctx: AuthContext) -> AuthContext:
             ip=ctx.client_ip,
             auth_required=True,
         )
-        raise HTTPException(status_code=401, detail={"errors": {"body": ["Unauthorized"]}})
+        raise HTTPException(status_code=401, detail={"errors": {"token": ["is missing"]}})
     return ctx
 
 
@@ -1344,7 +1351,14 @@ def register(request: Request, ctx: Annotated[AuthContext, Depends(get_auth_cont
     email = user_data.get("email")
     username = user_data.get("username")
     password = user_data.get("password")
-    if not all([email, username, password]):
+    missing = {}
+    if not username:
+        missing["username"] = ["can't be blank"]
+    if not email:
+        missing["email"] = ["can't be blank"]
+    if not password:
+        missing["password"] = ["can't be blank"]
+    if missing:
         log_structured(
             auth_logger,
             logging.WARNING,
@@ -1353,7 +1367,7 @@ def register(request: Request, ctx: Annotated[AuthContext, Depends(get_auth_cont
             email=email,
             username=username,
         )
-        raise HTTPException(status_code=422, detail={"errors": {"body": ["Email, username and password are required"]}})
+        raise HTTPException(status_code=422, detail={"errors": missing})
     max_lens = ((email, MAX_LEN_USER_EMAIL), (username, MAX_LEN_USER_USERNAME), (password, MAX_LEN_USER_PASSWORD))
     if not all(type(d) is str for d in (email, username, password)) or not all(len(v) <= m for v, m in max_lens):
         err_str = f"Email, username and password are expected as strings of length less than {MAX_LEN_USER_EMAIL}, {MAX_LEN_USER_USERNAME}, and {MAX_LEN_USER_PASSWORD}, respectively"
@@ -1366,7 +1380,12 @@ def register(request: Request, ctx: Annotated[AuthContext, Depends(get_auth_cont
             username=username,
         )
         raise HTTPException(status_code=422, detail={"errors": {"body": [err_str]}})
-    if get_user_by_email(email, ctx.storage) or get_user_by_username(username, ctx.storage):
+    conflict = {}
+    if get_user_by_username(username, ctx.storage):
+        conflict["username"] = ["has already been taken"]
+    if get_user_by_email(email, ctx.storage):
+        conflict["email"] = ["has already been taken"]
+    if conflict:
         log_structured(
             auth_logger,
             logging.WARNING,
@@ -1375,7 +1394,7 @@ def register(request: Request, ctx: Annotated[AuthContext, Depends(get_auth_cont
             email=email,
             username=username,
         )
-        raise HTTPException(status_code=409, detail={"errors": {"body": ["User already exists"]}})
+        raise HTTPException(status_code=409, detail={"errors": conflict})
     user = {
         "email": email,
         "username": username,
@@ -1407,9 +1426,14 @@ def login(request: Request, ctx: Annotated[AuthContext, Depends(get_auth_context
     user_data = data.get("user", {})
     email = user_data.get("email")
     password = user_data.get("password")
-    if not all([email, password]):
+    missing = {}
+    if not email:
+        missing["email"] = ["can't be blank"]
+    if not password:
+        missing["password"] = ["can't be blank"]
+    if missing:
         log_structured(auth_logger, logging.WARNING, "Login failed: missing fields", ip=ctx.client_ip, email=email)
-        raise HTTPException(status_code=422, detail={"errors": {"body": ["Email and password are required"]}})
+        raise HTTPException(status_code=422, detail={"errors": missing})
     hashed_password = hash_password(password)
     user = get_user_by_email(email, ctx.storage)
     target_session_id = ctx.session_id
@@ -1435,7 +1459,7 @@ def login(request: Request, ctx: Annotated[AuthContext, Depends(get_auth_context
             log_structured(
                 auth_logger, logging.WARNING, "Login failed: invalid credentials", ip=ctx.client_ip, email=email
             )
-            raise HTTPException(status_code=401, detail={"errors": {"body": ["invalid credentials"]}})
+            raise HTTPException(status_code=401, detail={"errors": {"credentials": ["invalid"]}})
     user["token"] = generate_token(user["id"])
     storage_container.bind_jwt_to_session_id(user["token"], target_session_id)
     log_structured(
@@ -1497,7 +1521,7 @@ def get_profile(username: str, ctx: Annotated[AuthContext, Depends(get_auth_cont
     """GET /profiles/{username} - Get profile"""
     user = get_user_by_username(username, ctx.storage)
     if not user:
-        raise HTTPException(status_code=404, detail={"errors": {"body": ["Profile not found"]}})
+        raise HTTPException(status_code=404, detail={"errors": {"profile": ["not found"]}})
     return {"profile": create_profile_response(user, ctx.storage, ctx.current_user_id)}
 
 
@@ -1507,7 +1531,7 @@ def follow_user(username: str, ctx: Annotated[AuthContext, Depends(get_auth_cont
     require_auth(ctx)
     user = get_user_by_username(username, ctx.storage)
     if not user:
-        raise HTTPException(status_code=404, detail={"errors": {"body": ["Profile not found"]}})
+        raise HTTPException(status_code=404, detail={"errors": {"profile": ["not found"]}})
     ctx.storage.follows.add(ctx.current_user_id, user["id"])
     return {"profile": create_profile_response(user, ctx.storage, ctx.current_user_id)}
 
@@ -1518,7 +1542,7 @@ def unfollow_user(username: str, ctx: Annotated[AuthContext, Depends(get_auth_co
     require_auth(ctx)
     user = get_user_by_username(username, ctx.storage)
     if not user:
-        raise HTTPException(status_code=404, detail={"errors": {"body": ["Profile not found"]}})
+        raise HTTPException(status_code=404, detail={"errors": {"profile": ["not found"]}})
     ctx.storage.follows.remove(ctx.current_user_id, user["id"])
     return {"profile": create_profile_response(user, ctx.storage, ctx.current_user_id)}
 
@@ -1583,8 +1607,15 @@ def create_article(request: Request, ctx: Annotated[AuthContext, Depends(get_aut
     title = article_data.get("title")
     description = article_data.get("description")
     body = article_data.get("body")
-    if not all([title, description, body]):
-        raise HTTPException(status_code=422, detail={"errors": {"body": ["Title, description and body are required"]}})
+    missing = {}
+    if not title:
+        missing["title"] = ["can't be blank"]
+    if not description:
+        missing["description"] = ["can't be blank"]
+    if not body:
+        missing["body"] = ["can't be blank"]
+    if missing:
+        raise HTTPException(status_code=422, detail={"errors": missing})
     for name, value, max_len in [
         ("title", title, MAX_LEN_ARTICLE_TITLE),
         ("description", description, MAX_LEN_ARTICLE_DESCRIPTION),
@@ -1614,7 +1645,7 @@ def create_article(request: Request, ctx: Annotated[AuthContext, Depends(get_aut
     # Generate slug – reject duplicates with 409
     slug = re.sub(r"[^\w\s-]", "", title.lower()).replace(" ", "-")[:50]
     if get_article_by_slug(slug, ctx.storage):
-        raise HTTPException(status_code=409, detail={"errors": {"body": ["Article with this title already exists"]}})
+        raise HTTPException(status_code=409, detail={"errors": {"title": ["has already been taken"]}})
     current_time = get_current_time()
     article = {
         "slug": slug,
@@ -1647,7 +1678,7 @@ def get_article(slug: str, ctx: Annotated[AuthContext, Depends(get_auth_context)
     """GET /articles/{slug} - Get article"""
     article = get_article_by_slug(slug, ctx.storage)
     if not article:
-        raise HTTPException(status_code=404, detail={"errors": {"body": ["Article not found"]}})
+        raise HTTPException(status_code=404, detail={"errors": {"article": ["not found"]}})
     return {"article": create_article_response(article, ctx.storage, ctx.current_user_id)}
 
 
@@ -1657,9 +1688,9 @@ def update_article(slug: str, request: Request, ctx: Annotated[AuthContext, Depe
     require_auth(ctx)
     article = get_article_by_slug(slug, ctx.storage)
     if not article:
-        raise HTTPException(status_code=404, detail={"errors": {"body": ["Article not found"]}})
+        raise HTTPException(status_code=404, detail={"errors": {"article": ["not found"]}})
     if article["author_id"] != ctx.current_user_id:
-        raise HTTPException(status_code=403, detail={"errors": {"body": ["Forbidden"]}})
+        raise HTTPException(status_code=403, detail={"errors": {"article": ["forbidden"]}})
     data = request.scope.get("_body_json", {})
     article_data = data.get("article", {})
     if "title" in article_data and article["title"] != article_data["title"]:
@@ -1673,7 +1704,7 @@ def update_article(slug: str, request: Request, ctx: Annotated[AuthContext, Depe
         new_slug = re.sub(r"[^\w\s-]", "", title.lower()).replace(" ", "-")[:50]
         existing = get_article_by_slug(new_slug, ctx.storage)
         if existing and existing["id"] != article["id"]:
-            raise HTTPException(status_code=409, detail={"errors": {"body": ["Article with this title already exists"]}})
+            raise HTTPException(status_code=409, detail={"errors": {"title": ["has already been taken"]}})
         article["slug"] = new_slug
     for name, max_len in [("description", MAX_LEN_ARTICLE_DESCRIPTION), ("body", MAX_LEN_ARTICLE_BODY)]:
         if name in article_data:
@@ -1693,9 +1724,9 @@ def delete_article(slug: str, ctx: Annotated[AuthContext, Depends(get_auth_conte
     require_auth(ctx)
     article = get_article_by_slug(slug, ctx.storage)
     if not article:
-        raise HTTPException(status_code=404, detail={"errors": {"body": ["Article not found"]}})
+        raise HTTPException(status_code=404, detail={"errors": {"article": ["not found"]}})
     if article["author_id"] != ctx.current_user_id:
-        raise HTTPException(status_code=403, detail={"errors": {"body": ["Forbidden"]}})
+        raise HTTPException(status_code=403, detail={"errors": {"article": ["forbidden"]}})
     article_id = article["id"]
     ctx.storage.articles.delete(article_id)
     ctx.storage.favorites.delete_target(article_id)
@@ -1723,7 +1754,7 @@ def favorite_article(slug: str, ctx: Annotated[AuthContext, Depends(get_auth_con
     require_auth(ctx)
     article = get_article_by_slug(slug, ctx.storage)
     if not article:
-        raise HTTPException(status_code=404, detail={"errors": {"body": ["Article not found"]}})
+        raise HTTPException(status_code=404, detail={"errors": {"article": ["not found"]}})
     ctx.storage.favorites.add(ctx.current_user_id, article["id"])
     return {"article": create_article_response(article, ctx.storage, ctx.current_user_id)}
 
@@ -1734,7 +1765,7 @@ def unfavorite_article(slug: str, ctx: Annotated[AuthContext, Depends(get_auth_c
     require_auth(ctx)
     article = get_article_by_slug(slug, ctx.storage)
     if not article:
-        raise HTTPException(status_code=404, detail={"errors": {"body": ["Article not found"]}})
+        raise HTTPException(status_code=404, detail={"errors": {"article": ["not found"]}})
     ctx.storage.favorites.remove(ctx.current_user_id, article["id"])
     return {"article": create_article_response(article, ctx.storage, ctx.current_user_id)}
 
@@ -1745,7 +1776,7 @@ def get_comments(slug: str, ctx: Annotated[AuthContext, Depends(get_auth_context
     """GET /articles/{slug}/comments - Get comments"""
     article = get_article_by_slug(slug, ctx.storage)
     if not article:
-        raise HTTPException(status_code=404, detail={"errors": {"body": ["Article not found"]}})
+        raise HTTPException(status_code=404, detail={"errors": {"article": ["not found"]}})
     comments = [c for c in ctx.storage.comments.values() if c["article_id"] == article["id"]]
     comments.sort(key=lambda x: x["createdAt"], reverse=True)
     return {"comments": [create_comment_response(c, ctx.storage, ctx.current_user_id) for c in comments]}
@@ -1757,12 +1788,12 @@ def create_comment(slug: str, request: Request, ctx: Annotated[AuthContext, Depe
     require_auth(ctx)
     article = get_article_by_slug(slug, ctx.storage)
     if not article:
-        raise HTTPException(status_code=404, detail={"errors": {"body": ["Article not found"]}})
+        raise HTTPException(status_code=404, detail={"errors": {"article": ["not found"]}})
     data = request.scope.get("_body_json", {})
     comment_data = data.get("comment", {})
     body = comment_data.get("body")
     if not body:
-        raise HTTPException(status_code=422, detail={"errors": {"body": ["Body is required"]}})
+        raise HTTPException(status_code=422, detail={"errors": {"body": ["can't be blank"]}})
     if type(body) is not str or len(body) > MAX_LEN_COMMENT_BODY:
         raise HTTPException(
             status_code=422,
@@ -1800,12 +1831,12 @@ def delete_comment(
     require_auth(ctx)
     article = get_article_by_slug(slug, ctx.storage)
     if not article:
-        raise HTTPException(status_code=404, detail={"errors": {"body": ["Article not found"]}})
+        raise HTTPException(status_code=404, detail={"errors": {"article": ["not found"]}})
     comment = ctx.storage.comments.get(id_)
     if not comment or comment["article_id"] != article["id"]:
-        raise HTTPException(status_code=404, detail={"errors": {"body": ["Comment not found"]}})
+        raise HTTPException(status_code=404, detail={"errors": {"comment": ["not found"]}})
     if comment["author_id"] != ctx.current_user_id and article["author_id"] != ctx.current_user_id:
-        raise HTTPException(status_code=403, detail={"errors": {"body": ["Forbidden"]}})
+        raise HTTPException(status_code=403, detail={"errors": {"article": ["forbidden"]}})
     ctx.storage.comments.delete(id_)
     log_structured(
         http_logger,
