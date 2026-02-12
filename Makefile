@@ -1,5 +1,4 @@
-.PHONY: run-dummy-for-prod run-dummy-for-postman
-.PHONY: test-dummy-server-api-with-postman-and-already-launched-server test-dummy-server-api-with-postman
+.PHONY: run-dummy-for-prod run-dummy-for-hurl
 .PHONY: test-dummy-server-api-with-hurl-and-already-launched-server test-dummy-server-api-with-hurl
 .PHONY: test-dummy-server-unittest
 .PHONY: submodules-fetch
@@ -16,9 +15,7 @@ SERVER_STARTUP_WAIT ?= 1
 help:
 	@echo "Available commands:"
 	@echo "  run-dummy-for-prod"
-	@echo "  run-dummy-for-postman"
-	@echo "  test-dummy-server-api-with-postman-and-already-launched-server"
-	@echo "  test-dummy-server-api-with-postman"
+	@echo "  run-dummy-for-hurl"
 	@echo "  test-dummy-server-api-with-hurl-and-already-launched-server"
 	@echo "  test-dummy-server-api-with-hurl"
 	@echo "  test-dummy-server-unittest"
@@ -35,32 +32,11 @@ help:
 run-dummy-for-prod:
 	PATH_PREFIX=/api $(PYTHON) realworld_dummy_server.py $(PORT)
 
-run-dummy-for-postman:
+run-dummy-for-hurl:
 	PATH_PREFIX=/api DISABLE_ISOLATION_MODE=True $(PYTHON) realworld_dummy_server.py $(PORT)
 
 ########################
 # Tests
-
-test-dummy-server-api-with-postman-and-already-launched-server:
-	( \
-	  [ -f "./realworld/api/run-api-tests.sh" ] || \
-	  ( echo '\n\033[0;31m    ENSURE SUBMODULES ARE PRESENT: \033[0m`make submodules-fetch`\n' && exit 1 ) \
-	) && \
-	( \
-	  DELAY_REQUEST=3 APIURL=http://localhost:8000/api ./realworld/api/run-api-tests.sh || \
-	  ( echo '\n\033[0;31m    ENSURE DEMO SERVER IS RUNNING: \033[0m`make run-dummy-for-postman-test`\n' && exit 1 ) \
-	)
-
-test-dummy-server-api-with-postman:
-	@set -e; \
-	$(PYTHON) -c "print('deps ready')"; \
-	PATH_PREFIX=/api DISABLE_ISOLATION_MODE=True $(PYTHON) realworld_dummy_server.py & \
-	SERVER_PID=$$!; \
-	trap "kill $$SERVER_PID 2>/dev/null || true" EXIT; \
-	sleep $(SERVER_STARTUP_WAIT); \
-	kill -0 "$$SERVER_PID" 2>/dev/null || exit 4; \
-	make test-dummy-server-api-with-postman-and-already-launched-server; \
-	kill $$SERVER_PID 2>/dev/null || true
 
 test-dummy-server-api-with-hurl-and-already-launched-server:
 	( \
@@ -69,7 +45,7 @@ test-dummy-server-api-with-hurl-and-already-launched-server:
 	) && \
 	( \
 	  HOST=http://localhost:$(PORT) ./realworld/api/hurl/run-hurl-tests.sh || \
-	  ( echo '\n\033[0;31m    ENSURE DEMO SERVER IS RUNNING: \033[0m`make run-dummy-for-postman`\n' && exit 1 ) \
+	  ( echo '\n\033[0;31m    ENSURE DEMO SERVER IS RUNNING: \033[0m`make run-dummy-for-hurl`\n' && exit 1 ) \
 	)
 
 test-dummy-server-api-with-hurl:
