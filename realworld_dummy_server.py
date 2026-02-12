@@ -1306,7 +1306,9 @@ def create_profile_response(user: Dict, storage: InMemoryStorage, current_user_i
     }
 
 
-def create_article_response(article: Dict, storage: InMemoryStorage, current_user_id: Optional[str] = None) -> Dict:
+def create_article_response(
+    article: Dict, storage: InMemoryStorage, current_user_id: Optional[str] = None, *, include_body: bool = True
+) -> Dict:
     """Create article response format"""
     author = storage.users.get(article["author_id"])
     favorited = False
@@ -1315,11 +1317,10 @@ def create_article_response(article: Dict, storage: InMemoryStorage, current_use
 
     favorites_count = len(storage.favorites.sources_for_target(article["id"]))
 
-    return {
+    result = {
         "slug": article["slug"],
         "title": article["title"],
         "description": article["description"],
-        "body": article["body"],
         "tagList": sorted(article["tagList"]),
         "createdAt": article["createdAt"],
         "updatedAt": article["updatedAt"],
@@ -1327,6 +1328,9 @@ def create_article_response(article: Dict, storage: InMemoryStorage, current_use
         "favoritesCount": favorites_count,
         "author": create_profile_response(author, storage, current_user_id),
     }
+    if include_body:
+        result["body"] = article["body"]
+    return result
 
 
 def create_comment_response(comment: Dict, storage: InMemoryStorage, current_user_id: Optional[str] = None) -> Dict:
@@ -1334,7 +1338,7 @@ def create_comment_response(comment: Dict, storage: InMemoryStorage, current_use
     author = storage.users.get(comment["author_id"])
 
     return {
-        "id": comment["id"],
+        "id": int(comment["id"]),
         "createdAt": comment["createdAt"],
         "updatedAt": comment["updatedAt"],
         "body": comment["body"],
@@ -1581,7 +1585,9 @@ def list_articles(
     total = len(articles)
     articles = articles[offset : offset + limit]
     return {
-        "articles": [create_article_response(a, ctx.storage, ctx.current_user_id) for a in articles],
+        "articles": [
+            create_article_response(a, ctx.storage, ctx.current_user_id, include_body=False) for a in articles
+        ],
         "articlesCount": total,
     }
 
@@ -1596,7 +1602,9 @@ def get_feed(ctx: Annotated[AuthContext, Depends(get_auth_context)], limit: int 
     total = len(articles)
     articles = articles[offset : offset + limit]
     return {
-        "articles": [create_article_response(a, ctx.storage, ctx.current_user_id) for a in articles],
+        "articles": [
+            create_article_response(a, ctx.storage, ctx.current_user_id, include_body=False) for a in articles
+        ],
         "articlesCount": total,
     }
 
@@ -1839,7 +1847,7 @@ def delete_comment(
     if not comment or comment["article_id"] != article["id"]:
         raise HTTPException(status_code=404, detail={"errors": {"comment": ["not found"]}})
     if comment["author_id"] != ctx.current_user_id and article["author_id"] != ctx.current_user_id:
-        raise HTTPException(status_code=403, detail={"errors": {"article": ["forbidden"]}})
+        raise HTTPException(status_code=403, detail={"errors": {"comment": ["forbidden"]}})
     ctx.storage.comments.delete(id_)
     log_structured(
         http_logger,
