@@ -1,5 +1,6 @@
 .PHONY: run-dummy-for-prod run-dummy-for-postman
 .PHONY: test-dummy-server-api-with-postman-and-already-launched-server test-dummy-server-api-with-postman
+.PHONY: test-dummy-server-api-with-hurl-and-already-launched-server test-dummy-server-api-with-hurl
 .PHONY: test-dummy-server-unittest
 .PHONY: submodules-fetch
 .PHONY: lint lint-check
@@ -18,6 +19,8 @@ help:
 	@echo "  run-dummy-for-postman"
 	@echo "  test-dummy-server-api-with-postman-and-already-launched-server"
 	@echo "  test-dummy-server-api-with-postman"
+	@echo "  test-dummy-server-api-with-hurl-and-already-launched-server"
+	@echo "  test-dummy-server-api-with-hurl"
 	@echo "  test-dummy-server-unittest"
 	@echo "  submodules-fetch"
 	@echo "  lint"
@@ -57,6 +60,28 @@ test-dummy-server-api-with-postman:
 	sleep $(SERVER_STARTUP_WAIT); \
 	kill -0 "$$SERVER_PID" 2>/dev/null || exit 4; \
 	make test-dummy-server-api-with-postman-and-already-launched-server; \
+	kill $$SERVER_PID 2>/dev/null || true
+
+test-dummy-server-api-with-hurl-and-already-launched-server:
+	( \
+	  [ -f "./realworld/api/hurl/run-hurl-tests.sh" ] || \
+	  ( echo '\n\033[0;31m    ENSURE SUBMODULES ARE PRESENT: \033[0m`make submodules-fetch`\n' && exit 1 ) \
+	) && \
+	( \
+	  HOST=http://localhost:$(PORT) ./realworld/api/hurl/run-hurl-tests.sh || \
+	  ( echo '\n\033[0;31m    ENSURE DEMO SERVER IS RUNNING: \033[0m`make run-dummy-for-postman`\n' && exit 1 ) \
+	)
+
+test-dummy-server-api-with-hurl:
+	@set -e; \
+	$(PYTHON) -c "print('deps ready')"; \
+	PATH_PREFIX=/api DISABLE_ISOLATION_MODE=True \
+	MAX_USERS_PER_SESSION=100 MAX_ARTICLES_PER_SESSION=100 MAX_COMMENTS_PER_SESSION=100 \
+	$(PYTHON) realworld_dummy_server.py $(PORT) & \
+	SERVER_PID=$$!; \
+	trap "kill $$SERVER_PID 2>/dev/null || true" EXIT; \
+	while ! curl -s http://localhost:$(PORT)/api/tags > /dev/null 2>&1; do sleep 0.2; done; \
+	make test-dummy-server-api-with-hurl-and-already-launched-server; \
 	kill $$SERVER_PID 2>/dev/null || true
 
 test-dummy-server-unittest:
