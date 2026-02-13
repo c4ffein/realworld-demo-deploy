@@ -1,5 +1,6 @@
-.PHONY: run-dummy-for-prod run-dummy-for-hurl
+.PHONY: run-dummy-for-prod run-dummy-for-hurl run-dummy-for-bruno
 .PHONY: test-dummy-server-api-with-hurl-and-already-launched-server test-dummy-server-api-with-hurl
+.PHONY: test-dummy-server-api-with-bruno-and-already-launched-server test-dummy-server-api-with-bruno
 .PHONY: test-dummy-server-unittest
 .PHONY: submodules-fetch
 .PHONY: lint lint-check
@@ -16,8 +17,11 @@ help:
 	@echo "Available commands:"
 	@echo "  run-dummy-for-prod"
 	@echo "  run-dummy-for-hurl"
+	@echo "  run-dummy-for-bruno"
 	@echo "  test-dummy-server-api-with-hurl-and-already-launched-server"
 	@echo "  test-dummy-server-api-with-hurl"
+	@echo "  test-dummy-server-api-with-bruno-and-already-launched-server"
+	@echo "  test-dummy-server-api-with-bruno"
 	@echo "  test-dummy-server-unittest"
 	@echo "  submodules-fetch"
 	@echo "  lint"
@@ -33,6 +37,9 @@ run-dummy-for-prod:
 	PATH_PREFIX=/api $(PYTHON) realworld_dummy_server.py $(PORT)
 
 run-dummy-for-hurl:
+	PATH_PREFIX=/api DISABLE_ISOLATION_MODE=True $(PYTHON) realworld_dummy_server.py $(PORT)
+
+run-dummy-for-bruno:
 	PATH_PREFIX=/api DISABLE_ISOLATION_MODE=True $(PYTHON) realworld_dummy_server.py $(PORT)
 
 ########################
@@ -58,6 +65,29 @@ test-dummy-server-api-with-hurl:
 	trap "kill $$SERVER_PID 2>/dev/null || true" EXIT; \
 	while ! curl -s http://localhost:$(PORT)/api/tags > /dev/null 2>&1; do sleep 0.2; done; \
 	make test-dummy-server-api-with-hurl-and-already-launched-server; \
+	kill $$SERVER_PID 2>/dev/null || true
+
+test-dummy-server-api-with-bruno-and-already-launched-server:
+	( \
+	  [ -d "./realworld/api/bruno" ] || \
+	  ( echo '\n\033[0;31m    ENSURE SUBMODULES ARE PRESENT: \033[0m`make submodules-fetch`\n' && exit 1 ) \
+	) && \
+	( \
+	  mkdir -p .tmp/bin && printf '#!/bin/sh\ncd $(CURDIR)/realworld/api/bruno && exec bun x @usebruno/cli "$$@"\n' > .tmp/bin/bru && chmod +x .tmp/bin/bru && \
+	  PATH="$(CURDIR)/.tmp/bin:$$PATH" HOST=http://localhost:$(PORT) ./realworld/api/run-api-tests-bruno.sh || \
+	  ( echo '\n\033[0;31m    ENSURE DEMO SERVER IS RUNNING: \033[0m`make run-dummy-for-bruno`\n' && exit 1 ) \
+	)
+
+test-dummy-server-api-with-bruno:
+	@set -e; \
+	$(PYTHON) -c "print('deps ready')"; \
+	PATH_PREFIX=/api DISABLE_ISOLATION_MODE=True \
+	MAX_USERS_PER_SESSION=100 MAX_ARTICLES_PER_SESSION=100 MAX_COMMENTS_PER_SESSION=100 \
+	$(PYTHON) realworld_dummy_server.py $(PORT) & \
+	SERVER_PID=$$!; \
+	trap "kill $$SERVER_PID 2>/dev/null || true" EXIT; \
+	while ! curl -s http://localhost:$(PORT)/api/tags > /dev/null 2>&1; do sleep 0.2; done; \
+	make test-dummy-server-api-with-bruno-and-already-launched-server; \
 	kill $$SERVER_PID 2>/dev/null || true
 
 test-dummy-server-unittest:
