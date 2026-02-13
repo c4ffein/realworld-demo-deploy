@@ -1,6 +1,7 @@
 .PHONY: run-dummy-for-prod run-dummy-for-hurl run-dummy-for-bruno
 .PHONY: test-dummy-server-api-with-hurl-and-already-launched-server test-dummy-server-api-with-hurl
 .PHONY: test-dummy-server-api-with-bruno-and-already-launched-server test-dummy-server-api-with-bruno
+.PHONY: test-dummy-server-api-with-bruno-unsafe-and-already-launched-server test-dummy-server-api-with-bruno-unsafe
 .PHONY: test-dummy-server-unittest
 .PHONY: submodules-fetch
 .PHONY: lint lint-check
@@ -9,6 +10,7 @@
 PYTHON = uvx --with fastapi --with uvicorn python
 PORT ?= 8000
 SERVER_STARTUP_WAIT ?= 1
+BRU_SANDBOX ?= safe
 
 ########################
 # Help
@@ -22,6 +24,8 @@ help:
 	@echo "  test-dummy-server-api-with-hurl"
 	@echo "  test-dummy-server-api-with-bruno-and-already-launched-server"
 	@echo "  test-dummy-server-api-with-bruno"
+	@echo "  test-dummy-server-api-with-bruno-unsafe-and-already-launched-server"
+	@echo "  test-dummy-server-api-with-bruno-unsafe"
 	@echo "  test-dummy-server-unittest"
 	@echo "  submodules-fetch"
 	@echo "  lint"
@@ -73,8 +77,7 @@ test-dummy-server-api-with-bruno-and-already-launched-server:
 	  ( echo '\n\033[0;31m    ENSURE SUBMODULES ARE PRESENT: \033[0m`make submodules-fetch`\n' && exit 1 ) \
 	) && \
 	( \
-	  mkdir -p .tmp/bin && printf '#!/bin/sh\ncd $(CURDIR)/realworld/api/bruno && exec bun x @usebruno/cli "$$@"\n' > .tmp/bin/bru && chmod +x .tmp/bin/bru && \
-	  PATH="$(CURDIR)/.tmp/bin:$$PATH" HOST=http://localhost:$(PORT) ./realworld/api/run-api-tests-bruno.sh || \
+	  cd realworld/api/bruno && bun x @usebruno/cli run . -r --env local --env-var "host=http://localhost:$(PORT)" --sandbox $(BRU_SANDBOX) || \
 	  ( echo '\n\033[0;31m    ENSURE DEMO SERVER IS RUNNING: \033[0m`make run-dummy-for-bruno`\n' && exit 1 ) \
 	)
 
@@ -89,6 +92,12 @@ test-dummy-server-api-with-bruno:
 	while ! curl -s http://localhost:$(PORT)/api/tags > /dev/null 2>&1; do sleep 0.2; done; \
 	make test-dummy-server-api-with-bruno-and-already-launched-server; \
 	kill $$SERVER_PID 2>/dev/null || true
+
+test-dummy-server-api-with-bruno-unsafe-and-already-launched-server:
+	$(MAKE) test-dummy-server-api-with-bruno-and-already-launched-server BRU_SANDBOX=developer
+
+test-dummy-server-api-with-bruno-unsafe:
+	$(MAKE) test-dummy-server-api-with-bruno BRU_SANDBOX=developer
 
 test-dummy-server-unittest:
 	uvx --with fastapi --with uvicorn --with pytest python -m pytest realworld_dummy_server.py

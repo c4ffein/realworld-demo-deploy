@@ -24,4 +24,4 @@ jobs:
       uses: oven-sh/setup-bun@v2
     - name: Run Tests
       run: |
-        make test-dummy-server-api-with-bruno
+        make test-dummy-server-api-with-bruno-unsafe
