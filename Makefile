@@ -44,7 +44,7 @@ test-dummy-server-api-with-hurl-and-already-launched-server:
 	  ( echo '\n\033[0;31m    ENSURE SUBMODULES ARE PRESENT: \033[0m`make submodules-fetch`\n' && exit 1 ) \
 	) && \
 	( \
-	  HOST=http://localhost:$(PORT) ./realworld/api/hurl/run-hurl-tests.sh || \
+	  HOST=http://localhost:$(PORT) ./realworld/api/run-api-tests-hurl.sh || \
 	  ( echo '\n\033[0;31m    ENSURE DEMO SERVER IS RUNNING: \033[0m`make run-dummy-for-hurl`\n' && exit 1 ) \
 	)
 
