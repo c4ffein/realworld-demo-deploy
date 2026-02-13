@@ -1,0 +1,27 @@
+name: Test Bruno
+
+on:
+  push:
+    branches: [ "master" ]
+  pull_request:
+    branches: [ "master" ]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        submodules: true  # single-level submodules
+    - name: Set up Python 3.12
+      uses: actions/setup-python@v3
+      with:
+        python-version: 3.12
+    - name: Set up uv
+      uses: astral-sh/setup-uv@v5
+    - name: Set up Bun
+      uses: oven-sh/setup-bun@v2
+    - name: Run Tests
+      run: |
+        make test-dummy-server-api-with-bruno
