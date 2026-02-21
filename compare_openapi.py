@@ -2,7 +2,7 @@
 """
 OpenAPI Spec Comparison Tool
 
-Compares the FastAPI-generated OpenAPI spec against the reference spec in realworld/api/openapi.yml.
+Compares the FastAPI-generated OpenAPI spec against the reference spec in realworld/specs/api/openapi.yml.
 Provides output digestible for humans and CI/automation.
 
 Usage:
@@ -10,7 +10,7 @@ Usage:
 
 Options:
     --server-url URL     Connect to existing server (default: auto-start)
-    --reference PATH     Reference spec path (default: realworld/api/openapi.yml)
+    --reference PATH     Reference spec path (default: realworld/specs/api/openapi.yml)
     --format {text,json,markdown}  Output format (default: text)
     --strict             Treat warnings as errors
     --port PORT          Port for auto-started server (default: random available)
@@ -590,8 +590,8 @@ def main():
     )
     parser.add_argument(
         "--reference",
-        default="realworld/api/openapi.yml",
-        help="Reference spec path (default: realworld/api/openapi.yml)",
+        default="realworld/specs/api/openapi.yml",
+        help="Reference spec path (default: realworld/specs/api/openapi.yml)",
     )
     parser.add_argument(
         "--format",

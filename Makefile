@@ -51,11 +51,11 @@ run-dummy-for-bruno:
 
 test-dummy-server-api-with-hurl-and-already-launched-server:
 	( \
-	  [ -f "./realworld/api/hurl/run-hurl-tests.sh" ] || \
+	  [ -f "./realworld/specs/api/hurl/run-hurl-tests.sh" ] || \
 	  ( echo '\n\033[0;31m    ENSURE SUBMODULES ARE PRESENT: \033[0m`make submodules-fetch`\n' && exit 1 ) \
 	) && \
 	( \
-	  HOST=http://localhost:$(PORT) ./realworld/api/run-api-tests-hurl.sh || \
+	  HOST=http://localhost:$(PORT) ./realworld/specs/api/run-api-tests-hurl.sh || \
 	  ( echo '\n\033[0;31m    ENSURE DEMO SERVER IS RUNNING: \033[0m`make run-dummy-for-hurl`\n' && exit 1 ) \
 	)
 
@@ -73,11 +73,11 @@ test-dummy-server-api-with-hurl:
 
 test-dummy-server-api-with-bruno-and-already-launched-server:
 	( \
-	  [ -d "./realworld/api/bruno" ] || \
+	  [ -d "./realworld/specs/api/bruno" ] || \
 	  ( echo '\n\033[0;31m    ENSURE SUBMODULES ARE PRESENT: \033[0m`make submodules-fetch`\n' && exit 1 ) \
 	) && \
 	( \
-	  cd realworld/api/bruno && bun x @usebruno/cli run . -r --env local --env-var "host=http://localhost:$(PORT)" --sandbox $(BRU_SANDBOX) || \
+	  cd realworld/specs/api/bruno && bun x @usebruno/cli run . -r --env local --env-var "host=http://localhost:$(PORT)" --sandbox $(BRU_SANDBOX) || \
 	  ( echo '\n\033[0;31m    ENSURE DEMO SERVER IS RUNNING: \033[0m`make run-dummy-for-bruno`\n' && exit 1 ) \
 	)
 
