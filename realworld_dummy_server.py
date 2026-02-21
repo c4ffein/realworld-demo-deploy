@@ -1498,10 +1498,13 @@ def update_user(request: Request, ctx: Annotated[AuthContext, Depends(get_auth_c
     user_data = data.get("user", {})
 
     # Helper to update fields
-    def update_field(name, max_len):
+    def update_field(name, max_len, nullable=False):
         if name in user_data:
             value = user_data[name]
-            if type(value) is not str or len(value) > max_len:
+            if nullable and (value is None or value == ""):
+                user[name] = None
+                return
+            if type(value) is not str or len(value) > max_len or not value:
                 raise HTTPException(
                     status_code=422, detail={"errors": {"body": [f"{name} is a string of less than {max_len} chars"]}}
                 )
@@ -1509,8 +1512,8 @@ def update_user(request: Request, ctx: Annotated[AuthContext, Depends(get_auth_c
 
     update_field("email", MAX_LEN_USER_EMAIL)
     update_field("username", MAX_LEN_USER_USERNAME)
-    update_field("bio", MAX_LEN_USER_BIO)
-    update_field("image", MAX_LEN_USER_IMAGE)
+    update_field("bio", MAX_LEN_USER_BIO, nullable=True)
+    update_field("image", MAX_LEN_USER_IMAGE, nullable=True)
     if "password" in user_data:
         pw = user_data["password"]
         if type(pw) is not str or len(pw) > MAX_LEN_USER_PASSWORD:
