@@ -1651,15 +1651,19 @@ def create_article(request: Request, ctx: Annotated[AuthContext, Depends(get_aut
             detail={
                 "errors": {
                     "body": [
-                        f"tagList is an optional list of less than {MAX_LEN_ARTICLE_TAG_LIST} strings of less than {MAX_LEN_ARTICLE_TAG_LEN} chars"
+                        f"tagList is an optional list of "
+                        f"less than {MAX_LEN_ARTICLE_TAG_LIST} strings of less than {MAX_LEN_ARTICLE_TAG_LEN} chars"
                     ]
                 }
             },
         )
-    # Generate slug – reject duplicates with 409
-    slug = re.sub(r"[^\w\s-]", "", title.lower()).replace(" ", "-")[:50]
-    if get_article_by_slug(slug, ctx.storage):
-        raise HTTPException(status_code=409, detail={"errors": {"title": ["has already been taken"]}})
+    # Generate slug – append suffix to ensure uniqueness
+    base_slug = "".join(c if c.isalnum() or c == "-" else "-" for c in title.lower()).strip("-")[:50]
+    slug = base_slug
+    suffix = 1
+    while get_article_by_slug(slug, ctx.storage):
+        slug = f"{base_slug}-{suffix}"
+        suffix += 1
     current_time = get_current_time()
     article = {
         "slug": slug,
@@ -1728,6 +1732,25 @@ def update_article(slug: str, request: Request, ctx: Annotated[AuthContext, Depe
                     status_code=422, detail={"errors": {"body": [f"{name} is a string of less than {max_len} chars"]}}
                 )
             article[name] = value
+    if "tagList" in article_data:
+        tag_list = article_data["tagList"]
+        if (
+            type(tag_list) is not list
+            or len(tag_list) > MAX_LEN_ARTICLE_TAG_LIST
+            or any(type(e) is not str for e in tag_list)
+            or any(len(e) > MAX_LEN_ARTICLE_TAG_LEN for e in tag_list)
+        ):
+            raise HTTPException(
+                status_code=422,
+                detail={
+                    "errors": {
+                        "body": [
+                            f"tagList is an optional list of less than {MAX_LEN_ARTICLE_TAG_LIST} strings of less than {MAX_LEN_ARTICLE_TAG_LEN} chars"
+                        ]
+                    }
+                },
+            )
+        article["tagList"] = sorted(tag_list)
     article["updatedAt"] = get_current_time()
     return {"article": create_article_response(article, ctx.storage, ctx.current_user_id)}
 
