@@ -61,7 +61,7 @@ from unittest import TestCase
 from unittest.mock import patch
 
 from fastapi import Depends, FastAPI, HTTPException, Path as PathParam, Request, Response, Security
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, RedirectResponse
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import APIKeyHeader
 
@@ -1010,7 +1010,28 @@ token_scheme = APIKeyHeader(
     auto_error=False,
 )
 
+# Register GenericErrorModel in the OpenAPI schema for ReDoc compatibility
+_original_openapi = app.openapi
+
+
+def _custom_openapi():
+    schema = _original_openapi()
+    schema.setdefault("components", {}).setdefault("schemas", {})["GenericErrorModel"] = {
+        "type": "object",
+        "required": ["errors"],
+        "properties": {
+            "errors": {"type": "object", "additionalProperties": {"type": "array", "items": {"type": "string"}}}
+        },
+    }
+    return schema
+
+
+app.openapi = _custom_openapi
+
+
 # Common OpenAPI response definitions to match the spec
+
+
 UNAUTHORIZED_RESPONSE = {"description": "Unauthorized"}
 VALIDATION_ERROR_RESPONSE = {
     "description": "Unexpected error",
@@ -1914,6 +1935,19 @@ async def parse_json_body(request: Request, call_next):
     return response
 
 
+# Redirect root and PATH_PREFIX to ReDoc documentation
+@app.get("/", include_in_schema=False)
+async def redirect_root_to_redoc():
+    return RedirectResponse(url="/redoc")
+
+
+if PATH_PREFIX:
+
+    @app.get(PATH_PREFIX, include_in_schema=False)
+    async def redirect_prefix_to_redoc():
+        return RedirectResponse(url="/redoc")
+
+
 def run_server(port: int = 8000):
     """Run the RealWorld API server with uvicorn"""
     import uvicorn
@@ -1964,7 +1998,7 @@ def run_server(port: int = 8000):
 
     # Document routes
     print(f"RealWorld API Server running on http://localhost:{port}")
-    print(f"OpenAPI docs available at http://localhost:{port}/docs")
+    print(f"OpenAPI docs available at http://localhost:{port}/docs and http://localhost:{port}/redoc")
     print("\nPress Ctrl+C to stop the server")
 
     # Run with uvicorn
@@ -4127,3 +4161,44 @@ class TestSaveAndLoadData(TestCase):
             loaded_data = json.loads(f.read())
         # Next line actually compares order
         self.assertEqual(json.dumps(loaded_data), json.dumps(self.TEST_DATA_EXPECTED_FILE_CONTENT))
+
+
+class TestOpenAPIDocs(TestCase):
+    """Tests that OpenAPI documentation routes work and the schema is valid for both Swagger UI and ReDoc."""
+
+    @classmethod
+    def setUpClass(cls):
+        from starlette.testclient import TestClient
+
+        cls.client = TestClient(app)
+
+    def test_openapi_json_has_generic_error_model(self):
+        """GenericErrorModel must be defined in schema — ReDoc crashes on unresolved $refs."""
+        response = self.client.get("/openapi.json")
+        self.assertEqual(response.status_code, 200)
+        schema = response.json()
+        self.assertIn("GenericErrorModel", schema["components"]["schemas"])
+        error_model = schema["components"]["schemas"]["GenericErrorModel"]
+        self.assertIn("errors", error_model["properties"])
+
+    def test_swagger_ui_loads(self):
+        response = self.client.get("/docs")
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("swagger-ui", response.text)
+
+    def test_redoc_loads(self):
+        response = self.client.get("/redoc")
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("redoc", response.text)
+
+    def test_root_redirects_to_redoc(self):
+        response = self.client.get("/", follow_redirects=False)
+        self.assertEqual(response.status_code, 307)
+        self.assertEqual(response.headers["location"], "/redoc")
+
+    def test_path_prefix_redirects_to_redoc(self):
+        if not PATH_PREFIX:
+            self.skipTest("PATH_PREFIX not set")
+        response = self.client.get(PATH_PREFIX, follow_redirects=False)
+        self.assertEqual(response.status_code, 307)
+        self.assertEqual(response.headers["location"], "/redoc")

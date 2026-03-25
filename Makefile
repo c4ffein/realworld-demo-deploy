@@ -100,7 +100,7 @@ test-dummy-server-api-with-bruno-unsafe:
 	$(MAKE) test-dummy-server-api-with-bruno BRU_SANDBOX=developer
 
 test-dummy-server-unittest:
-	uvx --with fastapi --with uvicorn --with pytest python -m pytest realworld_dummy_server.py
+	uvx --with fastapi --with uvicorn --with pytest --with httpx python -m pytest realworld_dummy_server.py
 
 ########################
 # Submodules
