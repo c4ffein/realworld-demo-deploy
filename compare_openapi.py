@@ -401,6 +401,40 @@ def compare_specs(ref_spec: dict, actual_spec: dict, path_prefix: str = "") -> l
                 )
             )
 
+    # Check for unresolved $refs in actual spec
+    differences.extend(find_broken_refs(actual_spec))
+
+    return differences
+
+
+def find_broken_refs(spec: dict) -> list[Difference]:
+    """Find all $ref pointers in the spec that don't resolve."""
+    differences = []
+    seen = set()
+
+    def walk(node: Any, path: str = "#") -> None:
+        if isinstance(node, dict):
+            if "$ref" in node:
+                ref = node["$ref"]
+                if ref not in seen:
+                    seen.add(ref)
+                    if not resolve_ref(spec, ref):
+                        differences.append(
+                            Difference(
+                                severity=CRITICAL,
+                                category="broken_ref",
+                                path=path,
+                                message=f"Unresolved $ref: {ref}",
+                                expected=ref,
+                            )
+                        )
+            for key, value in node.items():
+                walk(value, f"{path}/{key}")
+        elif isinstance(node, list):
+            for i, item in enumerate(node):
+                walk(item, f"{path}[{i}]")
+
+    walk(spec)
     return differences
 
 
