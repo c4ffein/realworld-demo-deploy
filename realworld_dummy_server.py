@@ -61,9 +61,11 @@ from unittest import TestCase
 from unittest.mock import patch
 
 from fastapi import Depends, FastAPI, HTTPException, Path as PathParam, Request, Response, Security
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, RedirectResponse
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import APIKeyHeader
+from pydantic import BaseModel
 
 #### CONFIGURATION #####################################################################################################
 
@@ -994,6 +996,11 @@ async def http_exception_handler(request: Request, exc: HTTPException):
     )
 
 
+@app.exception_handler(RequestValidationError)
+async def request_validation_exception_handler(request: Request, exc: RequestValidationError):
+    return JSONResponse(status_code=422, content={"errors": {"body": ["Invalid request body"]}})
+
+
 # Security scheme for OpenAPI documentation
 token_scheme = APIKeyHeader(
     name="Authorization",
@@ -1010,37 +1017,153 @@ token_scheme = APIKeyHeader(
     auto_error=False,
 )
 
-# Register GenericErrorModel in the OpenAPI schema for ReDoc compatibility
-_original_openapi = app.openapi
+#### PYDANTIC MODELS - OpenAPI schema definitions ######################################################################
 
 
-def _custom_openapi():
-    schema = _original_openapi()
-    schema.setdefault("components", {}).setdefault("schemas", {})["GenericErrorModel"] = {
-        "type": "object",
-        "required": ["errors"],
-        "properties": {
-            "errors": {"type": "object", "additionalProperties": {"type": "array", "items": {"type": "string"}}}
-        },
-    }
-    return schema
+# --- Response schemas (matching the RealWorld spec) ---
 
 
-app.openapi = _custom_openapi
+class ProfileSchema(BaseModel):
+    username: str
+    bio: str | None
+    image: str | None
+    following: bool
 
 
-# Common OpenAPI response definitions to match the spec
+class UserSchema(BaseModel):
+    email: str
+    token: str
+    username: str
+    bio: str | None
+    image: str | None
 
+
+class ArticleSchema(BaseModel):
+    slug: str
+    title: str
+    description: str
+    body: str | None = None
+    tagList: list[str]
+    createdAt: str
+    updatedAt: str
+    favorited: bool
+    favoritesCount: int
+    author: ProfileSchema
+
+
+class CommentSchema(BaseModel):
+    id: int
+    createdAt: str
+    updatedAt: str
+    body: str
+    author: ProfileSchema
+
+
+# --- Response wrappers ---
+
+
+class UserResponse(BaseModel):
+    user: UserSchema
+
+
+class ProfileResponse(BaseModel):
+    profile: ProfileSchema
+
+
+class SingleArticleResponse(BaseModel):
+    article: ArticleSchema
+
+
+class MultipleArticlesResponse(BaseModel):
+    articles: list[ArticleSchema]
+    articlesCount: int
+
+
+class SingleCommentResponse(BaseModel):
+    comment: CommentSchema
+
+
+class MultipleCommentsResponse(BaseModel):
+    comments: list[CommentSchema]
+
+
+class TagsResponse(BaseModel):
+    tags: list[str]
+
+
+class GenericErrorModel(BaseModel):
+    errors: dict[str, list[str]]
+
+
+# --- Request schemas ---
+
+
+class LoginUserBody(BaseModel):
+    email: str | None = None
+    password: str | None = None
+
+
+class LoginUserRequest(BaseModel):
+    user: LoginUserBody = LoginUserBody()
+
+
+class NewUserBody(BaseModel):
+    username: str | None = None
+    email: str | None = None
+    password: str | None = None
+
+
+class NewUserRequest(BaseModel):
+    user: NewUserBody = NewUserBody()
+
+
+class UpdateUserBody(BaseModel):
+    email: str | None = None
+    username: str | None = None
+    password: str | None = None
+    bio: str | None = None
+    image: str | None = None
+
+
+class UpdateUserRequest(BaseModel):
+    user: UpdateUserBody = UpdateUserBody()
+
+
+class NewArticleBody(BaseModel):
+    title: str | None = None
+    description: str | None = None
+    body: str | None = None
+    tagList: list[str] | None = None
+
+
+class NewArticleRequest(BaseModel):
+    article: NewArticleBody = NewArticleBody()
+
+
+class UpdateArticleBody(BaseModel):
+    title: str | None = None
+    description: str | None = None
+    body: str | None = None
+    tagList: list[str] | None = None
+
+
+class UpdateArticleRequest(BaseModel):
+    article: UpdateArticleBody = UpdateArticleBody()
+
+
+class NewCommentBody(BaseModel):
+    body: str | None = None
+
+
+class NewCommentRequest(BaseModel):
+    comment: NewCommentBody = NewCommentBody()
+
+
+# --- Common OpenAPI response definitions ---
 
 UNAUTHORIZED_RESPONSE = {"description": "Unauthorized"}
-VALIDATION_ERROR_RESPONSE = {
-    "description": "Unexpected error",
-    "content": {"application/json": {"schema": {"$ref": "#/components/schemas/GenericErrorModel"}}},
-}
-CONFLICT_RESPONSE = {
-    "description": "Conflict - resource already exists",
-    "content": {"application/json": {"schema": {"$ref": "#/components/schemas/GenericErrorModel"}}},
-}
+VALIDATION_ERROR_RESPONSE = {"description": "Unexpected error", "model": GenericErrorModel}
+CONFLICT_RESPONSE = {"description": "Conflict - resource already exists", "model": GenericErrorModel}
 RESPONSES_401 = {401: UNAUTHORIZED_RESPONSE}
 RESPONSES_422 = {422: VALIDATION_ERROR_RESPONSE}
 RESPONSES_409_422 = {409: CONFLICT_RESPONSE, 422: VALIDATION_ERROR_RESPONSE}
@@ -1371,14 +1494,12 @@ def create_comment_response(comment: Dict, storage: InMemoryStorage, current_use
 
 
 # Auth endpoints
-@app.post(f"{PATH_PREFIX}/users", status_code=201, responses=RESPONSES_409_422)
-def register(request: Request, ctx: Annotated[AuthContext, Depends(get_auth_context)]):
+@app.post(f"{PATH_PREFIX}/users", status_code=201, response_model=UserResponse, responses=RESPONSES_409_422)
+def register(body: NewUserRequest, ctx: Annotated[AuthContext, Depends(get_auth_context)]):
     """POST /users - Register new user"""
-    data = request.scope.get("_body_json", {})
-    user_data = data.get("user", {})
-    email = user_data.get("email")
-    username = user_data.get("username")
-    password = user_data.get("password")
+    email = body.user.email
+    username = body.user.username
+    password = body.user.password
     missing = {}
     if not username:
         missing["username"] = ["can't be blank"]
@@ -1447,13 +1568,11 @@ def register(request: Request, ctx: Annotated[AuthContext, Depends(get_auth_cont
     return {"user": create_user_response(user)}
 
 
-@app.post(f"{PATH_PREFIX}/users/login", responses=RESPONSES_401_422)
-def login(request: Request, ctx: Annotated[AuthContext, Depends(get_auth_context)]):
+@app.post(f"{PATH_PREFIX}/users/login", response_model=UserResponse, responses=RESPONSES_401_422)
+def login(body: LoginUserRequest, ctx: Annotated[AuthContext, Depends(get_auth_context)]):
     """POST /users/login - Login user"""
-    data = request.scope.get("_body_json", {})
-    user_data = data.get("user", {})
-    email = user_data.get("email")
-    password = user_data.get("password")
+    email = body.user.email
+    password = body.user.password
     missing = {}
     if not email:
         missing["email"] = ["can't be blank"]
@@ -1502,7 +1621,7 @@ def login(request: Request, ctx: Annotated[AuthContext, Depends(get_auth_context
     return {"user": create_user_response(user)}
 
 
-@app.get(f"{PATH_PREFIX}/user", responses=RESPONSES_401_422)
+@app.get(f"{PATH_PREFIX}/user", response_model=UserResponse, responses=RESPONSES_401_422)
 def get_current_user(ctx: Annotated[AuthContext, Depends(get_auth_context)]):
     """GET /user - Get current user"""
     require_auth(ctx)
@@ -1510,13 +1629,12 @@ def get_current_user(ctx: Annotated[AuthContext, Depends(get_auth_context)]):
     return {"user": create_user_response(user)}
 
 
-@app.put(f"{PATH_PREFIX}/user", responses=RESPONSES_401_422)
-def update_user(request: Request, ctx: Annotated[AuthContext, Depends(get_auth_context)]):
+@app.put(f"{PATH_PREFIX}/user", response_model=UserResponse, responses=RESPONSES_401_422)
+def update_user(body: UpdateUserRequest, ctx: Annotated[AuthContext, Depends(get_auth_context)]):
     """PUT /user - Update current user"""
     require_auth(ctx)
     user = ctx.storage.users.get(ctx.current_user_id)
-    data = request.scope.get("_body_json", {})
-    user_data = data.get("user", {})
+    user_data = body.user.model_dump(exclude_unset=True)
 
     # Helper to update fields
     def update_field(name, max_len, nullable=False):
@@ -1547,7 +1665,7 @@ def update_user(request: Request, ctx: Annotated[AuthContext, Depends(get_auth_c
 
 
 # Profile endpoints
-@app.get(f"{PATH_PREFIX}/profiles/{{username}}", responses=RESPONSES_401)
+@app.get(f"{PATH_PREFIX}/profiles/{{username}}", response_model=ProfileResponse, responses=RESPONSES_401)
 def get_profile(username: str, ctx: Annotated[AuthContext, Depends(get_auth_context)]):
     """GET /profiles/{username} - Get profile"""
     user = get_user_by_username(username, ctx.storage)
@@ -1556,7 +1674,7 @@ def get_profile(username: str, ctx: Annotated[AuthContext, Depends(get_auth_cont
     return {"profile": create_profile_response(user, ctx.storage, ctx.current_user_id)}
 
 
-@app.post(f"{PATH_PREFIX}/profiles/{{username}}/follow", responses=RESPONSES_401)
+@app.post(f"{PATH_PREFIX}/profiles/{{username}}/follow", response_model=ProfileResponse, responses=RESPONSES_401)
 def follow_user(username: str, ctx: Annotated[AuthContext, Depends(get_auth_context)]):
     """POST /profiles/{username}/follow - Follow user"""
     require_auth(ctx)
@@ -1567,7 +1685,7 @@ def follow_user(username: str, ctx: Annotated[AuthContext, Depends(get_auth_cont
     return {"profile": create_profile_response(user, ctx.storage, ctx.current_user_id)}
 
 
-@app.delete(f"{PATH_PREFIX}/profiles/{{username}}/follow", responses=RESPONSES_401)
+@app.delete(f"{PATH_PREFIX}/profiles/{{username}}/follow", response_model=ProfileResponse, responses=RESPONSES_401)
 def unfollow_user(username: str, ctx: Annotated[AuthContext, Depends(get_auth_context)]):
     """DELETE /profiles/{username}/follow - Unfollow user"""
     require_auth(ctx)
@@ -1579,7 +1697,7 @@ def unfollow_user(username: str, ctx: Annotated[AuthContext, Depends(get_auth_co
 
 
 # Article endpoints
-@app.get(f"{PATH_PREFIX}/articles", responses=RESPONSES_401)
+@app.get(f"{PATH_PREFIX}/articles", responses={200: {"model": MultipleArticlesResponse}, **RESPONSES_401})
 def list_articles(
     ctx: Annotated[AuthContext, Depends(get_auth_context)],
     tag: str | None = None,
@@ -1616,7 +1734,7 @@ def list_articles(
     }
 
 
-@app.get(f"{PATH_PREFIX}/articles/feed", responses=RESPONSES_401)
+@app.get(f"{PATH_PREFIX}/articles/feed", responses={200: {"model": MultipleArticlesResponse}, **RESPONSES_401})
 def get_feed(ctx: Annotated[AuthContext, Depends(get_auth_context)], limit: int = 20, offset: int = 0):
     """GET /articles/feed - Get feed"""
     require_auth(ctx)
@@ -1633,34 +1751,34 @@ def get_feed(ctx: Annotated[AuthContext, Depends(get_auth_context)], limit: int 
     }
 
 
-@app.post(f"{PATH_PREFIX}/articles", status_code=201, responses=RESPONSES_401_409_422)
-def create_article(request: Request, ctx: Annotated[AuthContext, Depends(get_auth_context)]):
+@app.post(
+    f"{PATH_PREFIX}/articles", status_code=201, response_model=SingleArticleResponse, responses=RESPONSES_401_409_422
+)
+def create_article(body: NewArticleRequest, ctx: Annotated[AuthContext, Depends(get_auth_context)]):
     """POST /articles - Create article"""
     require_auth(ctx)
-    data = request.scope.get("_body_json", {})
-    article_data = data.get("article", {})
-    title = article_data.get("title")
-    description = article_data.get("description")
-    body = article_data.get("body")
+    title = body.article.title
+    description = body.article.description
+    body_ = body.article.body
     missing = {}
     if not title:
         missing["title"] = ["can't be blank"]
     if not description:
         missing["description"] = ["can't be blank"]
-    if not body:
+    if not body_:
         missing["body"] = ["can't be blank"]
     if missing:
         raise HTTPException(status_code=422, detail={"errors": missing})
     for name, value, max_len in [
         ("title", title, MAX_LEN_ARTICLE_TITLE),
         ("description", description, MAX_LEN_ARTICLE_DESCRIPTION),
-        ("body", body, MAX_LEN_ARTICLE_BODY),
+        ("body", body_, MAX_LEN_ARTICLE_BODY),
     ]:
         if type(value) is not str or len(value) > max_len:
             raise HTTPException(
                 status_code=422, detail={"errors": {"body": [f"{name} is a string of less than {max_len} chars"]}}
             )
-    tag_list = article_data.get("tagList", [])
+    tag_list = body.article.tagList or []
     if (
         type(tag_list) is not list
         or len(tag_list) > MAX_LEN_ARTICLE_TAG_LIST
@@ -1690,7 +1808,7 @@ def create_article(request: Request, ctx: Annotated[AuthContext, Depends(get_aut
         "slug": slug,
         "title": title,
         "description": description,
-        "body": body,
+        "body": body_,
         "tagList": sorted(tag_list),
         "author_id": ctx.current_user_id,
         "createdAt": current_time,
@@ -1712,7 +1830,7 @@ def create_article(request: Request, ctx: Annotated[AuthContext, Depends(get_aut
     return {"article": create_article_response(article, ctx.storage, ctx.current_user_id)}
 
 
-@app.get(f"{PATH_PREFIX}/articles/{{slug}}")
+@app.get(f"{PATH_PREFIX}/articles/{{slug}}", response_model=SingleArticleResponse)
 def get_article(slug: str, ctx: Annotated[AuthContext, Depends(get_auth_context)]):
     """GET /articles/{slug} - Get article"""
     article = get_article_by_slug(slug, ctx.storage)
@@ -1721,8 +1839,8 @@ def get_article(slug: str, ctx: Annotated[AuthContext, Depends(get_auth_context)
     return {"article": create_article_response(article, ctx.storage, ctx.current_user_id)}
 
 
-@app.put(f"{PATH_PREFIX}/articles/{{slug}}", responses=RESPONSES_401)
-def update_article(slug: str, request: Request, ctx: Annotated[AuthContext, Depends(get_auth_context)]):
+@app.put(f"{PATH_PREFIX}/articles/{{slug}}", response_model=SingleArticleResponse, responses=RESPONSES_401)
+def update_article(slug: str, body: UpdateArticleRequest, ctx: Annotated[AuthContext, Depends(get_auth_context)]):
     """PUT /articles/{slug} - Update article"""
     require_auth(ctx)
     article = get_article_by_slug(slug, ctx.storage)
@@ -1730,8 +1848,7 @@ def update_article(slug: str, request: Request, ctx: Annotated[AuthContext, Depe
         raise HTTPException(status_code=404, detail={"errors": {"article": ["not found"]}})
     if article["author_id"] != ctx.current_user_id:
         raise HTTPException(status_code=403, detail={"errors": {"article": ["forbidden"]}})
-    data = request.scope.get("_body_json", {})
-    article_data = data.get("article", {})
+    article_data = body.article.model_dump(exclude_unset=True)
     if "title" in article_data and article["title"] != article_data["title"]:
         title = article_data["title"]
         if type(title) is not str or len(title) > MAX_LEN_ARTICLE_TITLE:
@@ -1806,7 +1923,7 @@ def delete_article(slug: str, ctx: Annotated[AuthContext, Depends(get_auth_conte
     return Response(status_code=204)
 
 
-@app.post(f"{PATH_PREFIX}/articles/{{slug}}/favorite", responses=RESPONSES_401)
+@app.post(f"{PATH_PREFIX}/articles/{{slug}}/favorite", response_model=SingleArticleResponse, responses=RESPONSES_401)
 def favorite_article(slug: str, ctx: Annotated[AuthContext, Depends(get_auth_context)]):
     """POST /articles/{slug}/favorite - Favorite article"""
     require_auth(ctx)
@@ -1817,7 +1934,7 @@ def favorite_article(slug: str, ctx: Annotated[AuthContext, Depends(get_auth_con
     return {"article": create_article_response(article, ctx.storage, ctx.current_user_id)}
 
 
-@app.delete(f"{PATH_PREFIX}/articles/{{slug}}/favorite", responses=RESPONSES_401)
+@app.delete(f"{PATH_PREFIX}/articles/{{slug}}/favorite", response_model=SingleArticleResponse, responses=RESPONSES_401)
 def unfavorite_article(slug: str, ctx: Annotated[AuthContext, Depends(get_auth_context)]):
     """DELETE /articles/{slug}/favorite - Unfavorite article"""
     require_auth(ctx)
@@ -1829,7 +1946,7 @@ def unfavorite_article(slug: str, ctx: Annotated[AuthContext, Depends(get_auth_c
 
 
 # Comment endpoints
-@app.get(f"{PATH_PREFIX}/articles/{{slug}}/comments", responses=RESPONSES_401)
+@app.get(f"{PATH_PREFIX}/articles/{{slug}}/comments", response_model=MultipleCommentsResponse, responses=RESPONSES_401)
 def get_comments(slug: str, ctx: Annotated[AuthContext, Depends(get_auth_context)]):
     """GET /articles/{slug}/comments - Get comments"""
     article = get_article_by_slug(slug, ctx.storage)
@@ -1840,26 +1957,29 @@ def get_comments(slug: str, ctx: Annotated[AuthContext, Depends(get_auth_context
     return {"comments": [create_comment_response(c, ctx.storage, ctx.current_user_id) for c in comments]}
 
 
-@app.post(f"{PATH_PREFIX}/articles/{{slug}}/comments", status_code=201, responses=RESPONSES_401)
-def create_comment(slug: str, request: Request, ctx: Annotated[AuthContext, Depends(get_auth_context)]):
+@app.post(
+    f"{PATH_PREFIX}/articles/{{slug}}/comments",
+    status_code=201,
+    response_model=SingleCommentResponse,
+    responses=RESPONSES_401,
+)
+def create_comment(slug: str, body: NewCommentRequest, ctx: Annotated[AuthContext, Depends(get_auth_context)]):
     """POST /articles/{slug}/comments - Create comment"""
     require_auth(ctx)
     article = get_article_by_slug(slug, ctx.storage)
     if not article:
         raise HTTPException(status_code=404, detail={"errors": {"article": ["not found"]}})
-    data = request.scope.get("_body_json", {})
-    comment_data = data.get("comment", {})
-    body = comment_data.get("body")
-    if not body:
+    comment_body = body.comment.body
+    if not comment_body:
         raise HTTPException(status_code=422, detail={"errors": {"body": ["can't be blank"]}})
-    if type(body) is not str or len(body) > MAX_LEN_COMMENT_BODY:
+    if type(comment_body) is not str or len(comment_body) > MAX_LEN_COMMENT_BODY:
         raise HTTPException(
             status_code=422,
             detail={"errors": {"body": [f"Body is a string of less than {MAX_LEN_COMMENT_BODY} chars"]}},
         )
     current_time = get_current_time()
     comment = {
-        "body": body,
+        "body": comment_body,
         "article_id": article["id"],
         "author_id": ctx.current_user_id,
         "createdAt": current_time,
@@ -1912,27 +2032,10 @@ def delete_comment(
 
 
 # Tag endpoints
-@app.get(f"{PATH_PREFIX}/tags", responses=RESPONSES_422)
+@app.get(f"{PATH_PREFIX}/tags", response_model=TagsResponse, responses=RESPONSES_422)
 def get_tags(ctx: Annotated[AuthContext, Depends(get_auth_context)]):
     """GET /tags - Get all tags"""
     return {"tags": sorted({t for a in ctx.storage.articles.values() for t in a.get("tagList", [])})}
-
-
-# Middleware to parse JSON body
-@app.middleware("http")
-async def parse_json_body(request: Request, call_next):
-    """Parse JSON body and store in request scope."""
-    if request.method in ["POST", "PUT", "PATCH"]:
-        try:
-            body = await request.body()
-            if body:
-                request.scope["_body_json"] = json.loads(body)
-            else:
-                request.scope["_body_json"] = {}
-        except json.JSONDecodeError:
-            request.scope["_body_json"] = {}
-    response = await call_next(request)
-    return response
 
 
 # Redirect root and PATH_PREFIX to ReDoc documentation
