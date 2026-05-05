@@ -1659,9 +1659,13 @@ def update_user(body: UpdateUserRequest, ctx: Annotated[AuthContext, Depends(get
         if type(pw) is not str or len(pw) < MIN_LEN_USER_PASSWORD or len(pw) > MAX_LEN_USER_PASSWORD:
             raise HTTPException(
                 status_code=422,
-                detail={"errors": {"body": [
-                    f"password must be a string between {MIN_LEN_USER_PASSWORD} and {MAX_LEN_USER_PASSWORD} chars"
-                ]}},
+                detail={
+                    "errors": {
+                        "body": [
+                            f"password must be a string between {MIN_LEN_USER_PASSWORD} and {MAX_LEN_USER_PASSWORD} chars"
+                        ]
+                    }
+                },
             )
         user["password"] = hash_password(pw)
     return {"user": create_user_response(user)}
