@@ -96,7 +96,8 @@ MAX_FAVORITES_PER_SESSION = int(getenv("MAX_FAVORITES_PER_SESSION", 100))
 # max lengths for fields in models
 MAX_LEN_USER_EMAIL = int(getenv("MAX_LEN_USER_EMAIL", 100))
 MAX_LEN_USER_USERNAME = int(getenv("MAX_LEN_USER_USERNAME", 60))
-MAX_LEN_USER_PASSWORD = int(getenv("MAX_LEN_USER_PASSWORD", 60))
+MIN_LEN_USER_PASSWORD = int(getenv("MIN_LEN_USER_PASSWORD", 8))
+MAX_LEN_USER_PASSWORD = int(getenv("MAX_LEN_USER_PASSWORD", 128))
 MAX_LEN_USER_BIO = int(getenv("MAX_LEN_USER_BIO", 400))
 MAX_LEN_USER_IMAGE = int(getenv("MAX_LEN_USER_IMAGE", 200))
 MAX_LEN_ARTICLE_TITLE = int(getenv("MAX_LEN_ARTICLE_TITLE", 100))
@@ -1655,10 +1656,12 @@ def update_user(body: UpdateUserRequest, ctx: Annotated[AuthContext, Depends(get
     update_field("image", MAX_LEN_USER_IMAGE, nullable=True)
     if "password" in user_data:
         pw = user_data["password"]
-        if type(pw) is not str or len(pw) > MAX_LEN_USER_PASSWORD:
+        if type(pw) is not str or len(pw) < MIN_LEN_USER_PASSWORD or len(pw) > MAX_LEN_USER_PASSWORD:
             raise HTTPException(
                 status_code=422,
-                detail={"errors": {"body": [f"password is a string of less than {MAX_LEN_USER_PASSWORD} chars"]}},
+                detail={"errors": {"body": [
+                    f"password must be a string between {MIN_LEN_USER_PASSWORD} and {MAX_LEN_USER_PASSWORD} chars"
+                ]}},
             )
         user["password"] = hash_password(pw)
     return {"user": create_user_response(user)}
