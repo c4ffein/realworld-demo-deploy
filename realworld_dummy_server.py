@@ -1203,7 +1203,7 @@ class AuthContext:
         self.client_ip = client_ip
 
 
-def get_auth_context(
+async def get_auth_context(
     request: Request,
     authorization: Annotated[str | None, Security(token_scheme)] = None,
 ) -> AuthContext:
@@ -1496,7 +1496,7 @@ def create_comment_response(comment: Dict, storage: InMemoryStorage, current_use
 
 # Auth endpoints
 @app.post(f"{PATH_PREFIX}/users", status_code=201, response_model=UserResponse, responses=RESPONSES_409_422)
-def register(body: NewUserRequest, ctx: Annotated[AuthContext, Depends(get_auth_context)]):
+async def register(body: NewUserRequest, ctx: Annotated[AuthContext, Depends(get_auth_context)]):
     """POST /users - Register new user"""
     email = body.user.email
     username = body.user.username
@@ -1570,7 +1570,7 @@ def register(body: NewUserRequest, ctx: Annotated[AuthContext, Depends(get_auth_
 
 
 @app.post(f"{PATH_PREFIX}/users/login", response_model=UserResponse, responses=RESPONSES_401_422)
-def login(body: LoginUserRequest, ctx: Annotated[AuthContext, Depends(get_auth_context)]):
+async def login(body: LoginUserRequest, ctx: Annotated[AuthContext, Depends(get_auth_context)]):
     """POST /users/login - Login user"""
     email = body.user.email
     password = body.user.password
@@ -1623,7 +1623,7 @@ def login(body: LoginUserRequest, ctx: Annotated[AuthContext, Depends(get_auth_c
 
 
 @app.get(f"{PATH_PREFIX}/user", response_model=UserResponse, responses=RESPONSES_401_422)
-def get_current_user(ctx: Annotated[AuthContext, Depends(get_auth_context)]):
+async def get_current_user(ctx: Annotated[AuthContext, Depends(get_auth_context)]):
     """GET /user - Get current user"""
     require_auth(ctx)
     user = ctx.storage.users.get(ctx.current_user_id)
@@ -1631,7 +1631,7 @@ def get_current_user(ctx: Annotated[AuthContext, Depends(get_auth_context)]):
 
 
 @app.put(f"{PATH_PREFIX}/user", response_model=UserResponse, responses=RESPONSES_401_422)
-def update_user(body: UpdateUserRequest, ctx: Annotated[AuthContext, Depends(get_auth_context)]):
+async def update_user(body: UpdateUserRequest, ctx: Annotated[AuthContext, Depends(get_auth_context)]):
     """PUT /user - Update current user"""
     require_auth(ctx)
     user = ctx.storage.users.get(ctx.current_user_id)
@@ -1673,7 +1673,7 @@ def update_user(body: UpdateUserRequest, ctx: Annotated[AuthContext, Depends(get
 
 # Profile endpoints
 @app.get(f"{PATH_PREFIX}/profiles/{{username}}", response_model=ProfileResponse, responses=RESPONSES_401)
-def get_profile(username: str, ctx: Annotated[AuthContext, Depends(get_auth_context)]):
+async def get_profile(username: str, ctx: Annotated[AuthContext, Depends(get_auth_context)]):
     """GET /profiles/{username} - Get profile"""
     user = get_user_by_username(username, ctx.storage)
     if not user:
@@ -1682,7 +1682,7 @@ def get_profile(username: str, ctx: Annotated[AuthContext, Depends(get_auth_cont
 
 
 @app.post(f"{PATH_PREFIX}/profiles/{{username}}/follow", response_model=ProfileResponse, responses=RESPONSES_401)
-def follow_user(username: str, ctx: Annotated[AuthContext, Depends(get_auth_context)]):
+async def follow_user(username: str, ctx: Annotated[AuthContext, Depends(get_auth_context)]):
     """POST /profiles/{username}/follow - Follow user"""
     require_auth(ctx)
     user = get_user_by_username(username, ctx.storage)
@@ -1693,7 +1693,7 @@ def follow_user(username: str, ctx: Annotated[AuthContext, Depends(get_auth_cont
 
 
 @app.delete(f"{PATH_PREFIX}/profiles/{{username}}/follow", response_model=ProfileResponse, responses=RESPONSES_401)
-def unfollow_user(username: str, ctx: Annotated[AuthContext, Depends(get_auth_context)]):
+async def unfollow_user(username: str, ctx: Annotated[AuthContext, Depends(get_auth_context)]):
     """DELETE /profiles/{username}/follow - Unfollow user"""
     require_auth(ctx)
     user = get_user_by_username(username, ctx.storage)
@@ -1705,7 +1705,7 @@ def unfollow_user(username: str, ctx: Annotated[AuthContext, Depends(get_auth_co
 
 # Article endpoints
 @app.get(f"{PATH_PREFIX}/articles", responses={200: {"model": MultipleArticlesResponse}, **RESPONSES_401})
-def list_articles(
+async def list_articles(
     ctx: Annotated[AuthContext, Depends(get_auth_context)],
     tag: str | None = None,
     author: str | None = None,
@@ -1742,7 +1742,7 @@ def list_articles(
 
 
 @app.get(f"{PATH_PREFIX}/articles/feed", responses={200: {"model": MultipleArticlesResponse}, **RESPONSES_401})
-def get_feed(ctx: Annotated[AuthContext, Depends(get_auth_context)], limit: int = 20, offset: int = 0):
+async def get_feed(ctx: Annotated[AuthContext, Depends(get_auth_context)], limit: int = 20, offset: int = 0):
     """GET /articles/feed - Get feed"""
     require_auth(ctx)
     followed_ids = ctx.storage.follows.targets_for_source(ctx.current_user_id)
@@ -1761,7 +1761,7 @@ def get_feed(ctx: Annotated[AuthContext, Depends(get_auth_context)], limit: int 
 @app.post(
     f"{PATH_PREFIX}/articles", status_code=201, response_model=SingleArticleResponse, responses=RESPONSES_401_409_422
 )
-def create_article(body: NewArticleRequest, ctx: Annotated[AuthContext, Depends(get_auth_context)]):
+async def create_article(body: NewArticleRequest, ctx: Annotated[AuthContext, Depends(get_auth_context)]):
     """POST /articles - Create article"""
     require_auth(ctx)
     title = body.article.title
@@ -1838,7 +1838,7 @@ def create_article(body: NewArticleRequest, ctx: Annotated[AuthContext, Depends(
 
 
 @app.get(f"{PATH_PREFIX}/articles/{{slug}}", response_model=SingleArticleResponse)
-def get_article(slug: str, ctx: Annotated[AuthContext, Depends(get_auth_context)]):
+async def get_article(slug: str, ctx: Annotated[AuthContext, Depends(get_auth_context)]):
     """GET /articles/{slug} - Get article"""
     article = get_article_by_slug(slug, ctx.storage)
     if not article:
@@ -1847,7 +1847,7 @@ def get_article(slug: str, ctx: Annotated[AuthContext, Depends(get_auth_context)
 
 
 @app.put(f"{PATH_PREFIX}/articles/{{slug}}", response_model=SingleArticleResponse, responses=RESPONSES_401)
-def update_article(slug: str, body: UpdateArticleRequest, ctx: Annotated[AuthContext, Depends(get_auth_context)]):
+async def update_article(slug: str, body: UpdateArticleRequest, ctx: Annotated[AuthContext, Depends(get_auth_context)]):
     """PUT /articles/{slug} - Update article"""
     require_auth(ctx)
     article = get_article_by_slug(slug, ctx.storage)
@@ -1901,7 +1901,7 @@ def update_article(slug: str, body: UpdateArticleRequest, ctx: Annotated[AuthCon
 
 
 @app.delete(f"{PATH_PREFIX}/articles/{{slug}}", status_code=204, responses=RESPONSES_401)
-def delete_article(slug: str, ctx: Annotated[AuthContext, Depends(get_auth_context)]):
+async def delete_article(slug: str, ctx: Annotated[AuthContext, Depends(get_auth_context)]):
     """DELETE /articles/{slug} - Delete article"""
     require_auth(ctx)
     article = get_article_by_slug(slug, ctx.storage)
@@ -1931,7 +1931,7 @@ def delete_article(slug: str, ctx: Annotated[AuthContext, Depends(get_auth_conte
 
 
 @app.post(f"{PATH_PREFIX}/articles/{{slug}}/favorite", response_model=SingleArticleResponse, responses=RESPONSES_401)
-def favorite_article(slug: str, ctx: Annotated[AuthContext, Depends(get_auth_context)]):
+async def favorite_article(slug: str, ctx: Annotated[AuthContext, Depends(get_auth_context)]):
     """POST /articles/{slug}/favorite - Favorite article"""
     require_auth(ctx)
     article = get_article_by_slug(slug, ctx.storage)
@@ -1942,7 +1942,7 @@ def favorite_article(slug: str, ctx: Annotated[AuthContext, Depends(get_auth_con
 
 
 @app.delete(f"{PATH_PREFIX}/articles/{{slug}}/favorite", response_model=SingleArticleResponse, responses=RESPONSES_401)
-def unfavorite_article(slug: str, ctx: Annotated[AuthContext, Depends(get_auth_context)]):
+async def unfavorite_article(slug: str, ctx: Annotated[AuthContext, Depends(get_auth_context)]):
     """DELETE /articles/{slug}/favorite - Unfavorite article"""
     require_auth(ctx)
     article = get_article_by_slug(slug, ctx.storage)
@@ -1954,7 +1954,7 @@ def unfavorite_article(slug: str, ctx: Annotated[AuthContext, Depends(get_auth_c
 
 # Comment endpoints
 @app.get(f"{PATH_PREFIX}/articles/{{slug}}/comments", response_model=MultipleCommentsResponse, responses=RESPONSES_401)
-def get_comments(slug: str, ctx: Annotated[AuthContext, Depends(get_auth_context)]):
+async def get_comments(slug: str, ctx: Annotated[AuthContext, Depends(get_auth_context)]):
     """GET /articles/{slug}/comments - Get comments"""
     article = get_article_by_slug(slug, ctx.storage)
     if not article:
@@ -1970,7 +1970,7 @@ def get_comments(slug: str, ctx: Annotated[AuthContext, Depends(get_auth_context
     response_model=SingleCommentResponse,
     responses=RESPONSES_401,
 )
-def create_comment(slug: str, body: NewCommentRequest, ctx: Annotated[AuthContext, Depends(get_auth_context)]):
+async def create_comment(slug: str, body: NewCommentRequest, ctx: Annotated[AuthContext, Depends(get_auth_context)]):
     """POST /articles/{slug}/comments - Create comment"""
     require_auth(ctx)
     article = get_article_by_slug(slug, ctx.storage)
@@ -2009,7 +2009,7 @@ def create_comment(slug: str, body: NewCommentRequest, ctx: Annotated[AuthContex
 
 
 @app.delete(f"{PATH_PREFIX}/articles/{{slug}}/comments/{{id}}", status_code=204, responses=RESPONSES_401)
-def delete_comment(
+async def delete_comment(
     slug: str, id_: Annotated[int, PathParam(alias="id")], ctx: Annotated[AuthContext, Depends(get_auth_context)]
 ):
     """DELETE /articles/{slug}/comments/{id} - Delete comment"""
@@ -2040,7 +2040,7 @@ def delete_comment(
 
 # Tag endpoints
 @app.get(f"{PATH_PREFIX}/tags", response_model=TagsResponse, responses=RESPONSES_422)
-def get_tags(ctx: Annotated[AuthContext, Depends(get_auth_context)]):
+async def get_tags(ctx: Annotated[AuthContext, Depends(get_auth_context)]):
     """GET /tags - Get all tags"""
     return {"tags": sorted({t for a in ctx.storage.articles.values() for t in a.get("tagList", [])})}
 
