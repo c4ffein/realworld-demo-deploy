@@ -1,3 +1,4 @@
+.PHONY: update-uvx-deps
 .PHONY: run-dummy-for-prod run-dummy-for-hurl run-dummy-for-bruno
 .PHONY: test-dummy-server-api-with-hurl-and-already-launched-server test-dummy-server-api-with-hurl
 .PHONY: test-dummy-server-api-with-bruno-and-already-launched-server test-dummy-server-api-with-bruno
@@ -17,6 +18,7 @@ BRUNO_SANDBOX ?= safe
 
 help:
 	@echo "Available commands:"
+	@echo "  update-uvx-deps"
 	@echo "  run-dummy-for-prod"
 	@echo "  run-dummy-for-hurl"
 	@echo "  run-dummy-for-bruno"
@@ -33,6 +35,13 @@ help:
 	@echo "  compare-openapi"
 	@echo "  compare-openapi-json"
 	@echo "  compare-openapi-markdown"
+
+########################
+# Update
+
+update-uvx-deps:
+	uvx --refresh fastapi[standard]
+	uvx --refresh uvicorn
 
 ########################
 # Run
