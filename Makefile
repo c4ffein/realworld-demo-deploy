@@ -40,8 +40,8 @@ help:
 # Update
 
 update-uvx-deps:
-	uvx --refresh fastapi[standard]
-	uvx --refresh uvicorn
+	uvx --refresh fastapi[standard] --help > /dev/null
+	uvx --refresh uvicorn --help > /dev/null
 
 ########################
 # Run
