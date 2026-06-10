@@ -848,6 +848,8 @@ class _StorageContainer:
 
     def push(self, priority, session_id, data=None, client_ip=None):
         """Push a session onto the heap, add it to the index, and manage the sessions by ip (possible evictment)"""
+        client_ip = self._normalize_ip_for_limiting(client_ip) if client_ip else client_ip
+        # normalized before storage so the saved ip always matches the ip_to_sessions keys, which are normalized
         self._push(priority, session_id, data, client_ip)
         self._handle_client_ip_and_session_addition(session_id, client_ip)  # can potentially remove a session
 
@@ -3470,6 +3472,24 @@ class TestStorageContainer(TestCase):
         self.container._push(1, "session1", "data1", "192.168.1.1")
         self.container._handle_client_ip_and_session_reattribution("session1", None, "192.168.1.2")
         self.assertEqual(self.container.ip_to_sessions, {"192.168.1.2": ["session1"]})
+
+    def test_ipv6_session_accessed_from_other_ip_then_evicted_does_not_brick_ip_range(self):
+        """Regression test: the heap item saved the raw client_ip while ip_to_sessions keys are normalized,
+        so reattribution of a session created from a raw IPv6 address tried to remove it from the raw key,
+        leaving a stale entry under the original /64 after eviction
+        The per-IP eviction loop then raised ValueError forever for new sessions from that /64"""
+        self.container.push(1, "session1", "data1", client_ip="2001:db8:85a3:8d3:1319:8a2e:370:7348")
+        self.container.update_priority("session1", 2, client_ip="192.168.1.1")  # client switches networks
+        self.assertEqual(self.container.ip_to_sessions, {"192.168.1.1": ["session1"]})  # no stale /64 entry
+        self.container.pop()  # session eventually evicted
+        self.assertEqual(self.container.ip_to_sessions, {})
+        for i in range(MAX_SESSIONS_PER_IP + 1):  # new clients from the original /64 - raised ValueError
+            self.container.push(10 + i, f"other{i}", f"data{i}", client_ip=f"2001:db8:85a3:8d3:aaaa::{i:x}")
+        self.assertEqual(
+            self.container.ip_to_sessions,
+            {"2001:db8:85a3:8d3::/64": [f"other{i}" for i in range(1, MAX_SESSIONS_PER_IP + 1)]},
+        )
+        self._verify_index_consistency(self.container)
 
     def test_normalize_ip_for_limiting_ipv4(self):
         """Test IP normalization for IPv4 addresses"""
