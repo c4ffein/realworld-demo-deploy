@@ -65,7 +65,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, RedirectResponse
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import APIKeyHeader
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 #### CONFIGURATION #####################################################################################################
 
@@ -1034,7 +1034,7 @@ class ProfileSchema(BaseModel):
 
 
 class UserSchema(BaseModel):
-    email: str
+    email: str = Field(json_schema_extra={"format": "email"})
     token: str
     username: str
     bio: str | None
@@ -1102,7 +1102,7 @@ class GenericErrorModel(BaseModel):
 
 
 class LoginUserBody(BaseModel):
-    email: str | None = None
+    email: str | None = Field(default=None, json_schema_extra={"format": "email"})
     password: str | None = None
 
 
@@ -1112,7 +1112,7 @@ class LoginUserRequest(BaseModel):
 
 class NewUserBody(BaseModel):
     username: str | None = None
-    email: str | None = None
+    email: str | None = Field(default=None, json_schema_extra={"format": "email"})
     password: str | None = None
 
 
@@ -1121,7 +1121,7 @@ class NewUserRequest(BaseModel):
 
 
 class UpdateUserBody(BaseModel):
-    email: str | None = None
+    email: str | None = Field(default=None, json_schema_extra={"format": "email"})
     username: str | None = None
     password: str | None = None
     bio: str | None = None
@@ -1411,6 +1411,11 @@ def verify_token(token: str, storage: InMemoryStorage, client_ip: str = None) ->
     return user_id
 
 
+def is_valid_email(email) -> bool:
+    """Permissive check matching JSON Schema `format: email`: one `@` with a non-empty local part and domain"""
+    return isinstance(email, str) and re.fullmatch(r"[^@\s]+@[^@\s]+", email) is not None
+
+
 def get_user_by_email(email: str, storage: InMemoryStorage) -> Optional[Dict]:
     """Find user by email"""
     return next((user for user in storage.users.values() if user["email"] == email), None)
@@ -1520,6 +1525,16 @@ async def register(body: NewUserRequest, ctx: Annotated[AuthContext, Depends(get
             username=username,
         )
         raise HTTPException(status_code=422, detail={"errors": missing})
+    if not is_valid_email(email):
+        log_structured(
+            auth_logger,
+            logging.WARNING,
+            "Registration failed: invalid email",
+            ip=ctx.client_ip,
+            email=email,
+            username=username,
+        )
+        raise HTTPException(status_code=422, detail={"errors": {"email": ["is invalid"]}})
     max_lens = ((email, MAX_LEN_USER_EMAIL), (username, MAX_LEN_USER_USERNAME), (password, MAX_LEN_USER_PASSWORD))
     if not all(type(d) is str for d in (email, username, password)) or not all(len(v) <= m for v, m in max_lens):
         err_str = f"Email, username and password are expected as strings of length less than {MAX_LEN_USER_EMAIL}, {MAX_LEN_USER_USERNAME}, and {MAX_LEN_USER_PASSWORD}, respectively"
@@ -1584,6 +1599,9 @@ async def login(body: LoginUserRequest, ctx: Annotated[AuthContext, Depends(get_
     if missing:
         log_structured(auth_logger, logging.WARNING, "Login failed: missing fields", ip=ctx.client_ip, email=email)
         raise HTTPException(status_code=422, detail={"errors": missing})
+    if not is_valid_email(email):
+        log_structured(auth_logger, logging.WARNING, "Login failed: invalid email", ip=ctx.client_ip, email=email)
+        raise HTTPException(status_code=422, detail={"errors": {"email": ["is invalid"]}})
     hashed_password = hash_password(password)
     user = get_user_by_email(email, ctx.storage)
     target_session_id = ctx.session_id
@@ -1652,6 +1670,8 @@ async def update_user(body: UpdateUserRequest, ctx: Annotated[AuthContext, Depen
                 )
             user[name] = value
 
+    if user_data.get("email") and not is_valid_email(user_data["email"]):
+        raise HTTPException(status_code=422, detail={"errors": {"email": ["is invalid"]}})
     update_field("email", MAX_LEN_USER_EMAIL)
     update_field("username", MAX_LEN_USER_USERNAME)
     update_field("bio", MAX_LEN_USER_BIO, nullable=True)
