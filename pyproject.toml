@@ -1,0 +1,5 @@
+[tool.ruff]
+# the realworld/ submodule is third-party code, not linted here
+extend-exclude = ["realworld"]
+# oldest Python in the CI matrix (test-unit.yml)
+target-version = "py311"

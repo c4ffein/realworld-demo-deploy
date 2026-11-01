@@ -52,18 +52,19 @@ import sys
 import time
 import uuid
 from contextlib import asynccontextmanager
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from os import getenv
 from pathlib import Path
 from time import time_ns
-from typing import Annotated, Dict, List, Optional, Tuple
+from typing import Annotated, ClassVar
 from unittest import TestCase
 from unittest.mock import patch
 
-from fastapi import Depends, FastAPI, HTTPException, Path as PathParam, Request, Response, Security
+from fastapi import Depends, FastAPI, HTTPException, Request, Response, Security
+from fastapi import Path as PathParam
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import JSONResponse, RedirectResponse
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse, RedirectResponse
 from fastapi.security import APIKeyHeader
 from pydantic import BaseModel, Field
 
@@ -82,30 +83,31 @@ CLIENT_IP_HEADER = getenv("CLIENT_IP_HEADER")  # Optional header name for client
 # logging
 LOG_LEVEL = getenv("LOG_LEVEL", "INFO").upper()
 LOG_FILE = getenv("LOG_FILE")  # Optional file logging
-LOG_MAX_SIZE = int(getenv("LOG_MAX_SIZE", 10 * 1024 * 1024))  # 10MB default
-LOG_BACKUP_COUNT = int(getenv("LOG_BACKUP_COUNT", 5))
+LOG_MAX_SIZE = int(getenv("LOG_MAX_SIZE", str(10 * 1024 * 1024)))  # 10MB default
+LOG_BACKUP_COUNT = int(getenv("LOG_BACKUP_COUNT", "5"))
 # data persistence
-DATA_FILE_PATH = (lambda path: Path(path) if path else None)(getenv("DATA_FILE_PATH"))
+_data_file_path = getenv("DATA_FILE_PATH")
+DATA_FILE_PATH = Path(_data_file_path) if _data_file_path else None
 # max lengths for keys and objects per session
-MAX_ID_LEN = int(getenv("MAX_ID_LEN", 64))
-MAX_USERS_PER_SESSION = int(getenv("MAX_USERS_PER_SESSION", 6))
-MAX_ARTICLES_PER_SESSION = int(getenv("MAX_ARTICLES_PER_SESSION", 20))
-MAX_COMMENTS_PER_SESSION = int(getenv("MAX_COMMENTS_PER_SESSION", 20))
-MAX_FOLLOWS_PER_SESSION = int(getenv("MAX_FOLLOWS_PER_SESSION", 100))
-MAX_FAVORITES_PER_SESSION = int(getenv("MAX_FAVORITES_PER_SESSION", 100))
+MAX_ID_LEN = int(getenv("MAX_ID_LEN", "64"))
+MAX_USERS_PER_SESSION = int(getenv("MAX_USERS_PER_SESSION", "6"))
+MAX_ARTICLES_PER_SESSION = int(getenv("MAX_ARTICLES_PER_SESSION", "20"))
+MAX_COMMENTS_PER_SESSION = int(getenv("MAX_COMMENTS_PER_SESSION", "20"))
+MAX_FOLLOWS_PER_SESSION = int(getenv("MAX_FOLLOWS_PER_SESSION", "100"))
+MAX_FAVORITES_PER_SESSION = int(getenv("MAX_FAVORITES_PER_SESSION", "100"))
 # max lengths for fields in models
-MAX_LEN_USER_EMAIL = int(getenv("MAX_LEN_USER_EMAIL", 100))
-MAX_LEN_USER_USERNAME = int(getenv("MAX_LEN_USER_USERNAME", 60))
-MIN_LEN_USER_PASSWORD = int(getenv("MIN_LEN_USER_PASSWORD", 8))
-MAX_LEN_USER_PASSWORD = int(getenv("MAX_LEN_USER_PASSWORD", 128))
-MAX_LEN_USER_BIO = int(getenv("MAX_LEN_USER_BIO", 400))
-MAX_LEN_USER_IMAGE = int(getenv("MAX_LEN_USER_IMAGE", 200))
-MAX_LEN_ARTICLE_TITLE = int(getenv("MAX_LEN_ARTICLE_TITLE", 100))
-MAX_LEN_ARTICLE_DESCRIPTION = int(getenv("MAX_LEN_ARTICLE_DESCRIPTION", 300))
-MAX_LEN_ARTICLE_BODY = int(getenv("MAX_LEN_ARTICLE_BODY", 10000))
-MAX_LEN_ARTICLE_TAG_LIST = int(getenv("MAX_LEN_ARTICLE_TAG_LIST", 10))
-MAX_LEN_ARTICLE_TAG_LEN = int(getenv("MAX_LEN_ARTICLE_TAG_LEN", 20))
-MAX_LEN_COMMENT_BODY = int(getenv("MAX_LEN_COMMENT_BODY", 3000))
+MAX_LEN_USER_EMAIL = int(getenv("MAX_LEN_USER_EMAIL", "100"))
+MAX_LEN_USER_USERNAME = int(getenv("MAX_LEN_USER_USERNAME", "60"))
+MIN_LEN_USER_PASSWORD = int(getenv("MIN_LEN_USER_PASSWORD", "8"))
+MAX_LEN_USER_PASSWORD = int(getenv("MAX_LEN_USER_PASSWORD", "128"))
+MAX_LEN_USER_BIO = int(getenv("MAX_LEN_USER_BIO", "400"))
+MAX_LEN_USER_IMAGE = int(getenv("MAX_LEN_USER_IMAGE", "200"))
+MAX_LEN_ARTICLE_TITLE = int(getenv("MAX_LEN_ARTICLE_TITLE", "100"))
+MAX_LEN_ARTICLE_DESCRIPTION = int(getenv("MAX_LEN_ARTICLE_DESCRIPTION", "300"))
+MAX_LEN_ARTICLE_BODY = int(getenv("MAX_LEN_ARTICLE_BODY", "10000"))
+MAX_LEN_ARTICLE_TAG_LIST = int(getenv("MAX_LEN_ARTICLE_TAG_LIST", "10"))
+MAX_LEN_ARTICLE_TAG_LEN = int(getenv("MAX_LEN_ARTICLE_TAG_LEN", "20"))
+MAX_LEN_COMMENT_BODY = int(getenv("MAX_LEN_COMMENT_BODY", "3000"))
 # computed naive total size - not counting the links like favorites and followed
 NAIVE_SIZE_USER = MAX_LEN_USER_EMAIL + MAX_LEN_USER_USERNAME + MAX_LEN_USER_PASSWORD + MAX_LEN_USER_BIO
 NAIVE_SIZE_USER += MAX_LEN_USER_IMAGE
@@ -135,8 +137,8 @@ class JSONFormatter(logging.Formatter):
             "timestamp": datetime.fromtimestamp(record.created).strftime("%Y-%m-%dT%H:%M:%S.%f"),
             "logger": record.name,
             "level": record.levelname,
-            "category": (lambda v: f"{record.name}.{v}" if v is not None else record.name)(
-                getattr(record, "category", None)
+            "category": (
+                f"{record.name}.{record.category}" if getattr(record, "category", None) is not None else record.name
             ),
             "message": record.getMessage(),
             "data": getattr(record, "data", {}),
@@ -194,7 +196,7 @@ def format_datetime(dt: datetime) -> str:
 
 def get_current_time() -> str:
     """Get current time in ISO format"""
-    return format_datetime(datetime.now(timezone.utc))
+    return format_datetime(datetime.now(UTC))
 
 
 def hash_password(password: str) -> str:
@@ -401,8 +403,8 @@ class InMemoryModel:
 
     def __init__(self, max_count):
         self.max_count: int = max_count
-        self.objects: Dict[str, object] = {}
-        self.last_accessed_ids: List[str] = []  # perf ok because of the objects per model per session limit
+        self.objects: dict[str, object] = {}
+        self.last_accessed_ids: list[str] = []  # perf ok because of the objects per model per session limit
         self.current_id_counter = 1
         if self.max_count <= 0:
             raise ValueError("invalid value for max_count")
@@ -488,7 +490,7 @@ class InMemoryModel:
 class InMemoryLinks:
     def __init__(self, max_count):
         self.max_count: int = max_count
-        self.links: List[Tuple[int, int]] = []  # cheaper implem to limit global number of links and wipe oldest
+        self.links: list[tuple[int, int]] = []  # cheaper implem to limit global number of links and wipe oldest
 
     def add(self, source, target):
         source, target = normalize_id(source), normalize_id(target)
@@ -1187,7 +1189,7 @@ def get_client_ip(request: Request) -> str:
 def get_storage_and_session(
     request: Request,
     authorization: Annotated[str | None, Security(token_scheme)] = None,
-) -> Tuple[str, InMemoryStorage, str | None]:
+) -> tuple[str, InMemoryStorage, str | None]:
     """Get storage, session_id, and token from request."""
     client_ip = get_client_ip(request)
     token = authorization.replace("Token ", "") if authorization and authorization.startswith("Token ") else None
@@ -1290,7 +1292,7 @@ def save_data():
             operation="save_success",
         )
         return True
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 - persistence must never take the server down
         log_structured(
             storage_logger,
             logging.ERROR,
@@ -1356,8 +1358,7 @@ def load_data():
             data_file_path=str(DATA_FILE_PATH),
             operation="load_no_file",
         )
-        pass
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 - persistence must never take the server down
         log_structured(
             storage_logger,
             logging.ERROR,
@@ -1381,7 +1382,7 @@ def generate_token(user_id: str) -> str:
     return f"token_{hashlib.sha256(payload.encode()).hexdigest()[:32]}"
 
 
-def verify_token(token: str, storage: InMemoryStorage, client_ip: str = None) -> Optional[int]:
+def verify_token(token: str, storage: InMemoryStorage, client_ip: str | None = None) -> int | None:
     """Verify token and return user_id if valid"""
     if not token or not token.startswith("token_"):
         if token:  # Only log if token was provided but invalid
@@ -1416,22 +1417,22 @@ def is_valid_email(email) -> bool:
     return isinstance(email, str) and re.fullmatch(r"[^@\s]+@[^@\s]+", email) is not None
 
 
-def get_user_by_email(email: str, storage: InMemoryStorage) -> Optional[Dict]:
+def get_user_by_email(email: str, storage: InMemoryStorage) -> dict | None:
     """Find user by email"""
     return next((user for user in storage.users.values() if user["email"] == email), None)
 
 
-def get_user_by_username(username: str, storage: InMemoryStorage) -> Optional[Dict]:
+def get_user_by_username(username: str, storage: InMemoryStorage) -> dict | None:
     """Find user by username"""
     return next((user for user in storage.users.values() if user["username"] == username), None)
 
 
-def get_article_by_slug(slug: str, storage: InMemoryStorage) -> Optional[Dict]:
+def get_article_by_slug(slug: str, storage: InMemoryStorage) -> dict | None:
     """Find article by slug"""
     return next((article for article in storage.articles.values() if article["slug"] == slug), None)
 
 
-def create_user_response(user: Dict, include_token: bool = True) -> Dict:
+def create_user_response(user: dict, include_token: bool = True) -> dict:
     """Create user response format"""
     response = {
         "username": user["username"],
@@ -1444,7 +1445,7 @@ def create_user_response(user: Dict, include_token: bool = True) -> Dict:
     return response
 
 
-def create_profile_response(user: Dict, storage: InMemoryStorage, current_user_id: Optional[str] = None) -> Dict:
+def create_profile_response(user: dict, storage: InMemoryStorage, current_user_id: str | None = None) -> dict:
     """Create profile response format"""
     following = False
     if current_user_id:
@@ -1459,8 +1460,8 @@ def create_profile_response(user: Dict, storage: InMemoryStorage, current_user_i
 
 
 def create_article_response(
-    article: Dict, storage: InMemoryStorage, current_user_id: Optional[str] = None, *, include_body: bool = True
-) -> Dict:
+    article: dict, storage: InMemoryStorage, current_user_id: str | None = None, *, include_body: bool = True
+) -> dict:
     """Create article response format"""
     author = storage.users.get(article["author_id"])
     favorited = False
@@ -1485,7 +1486,7 @@ def create_article_response(
     return result
 
 
-def create_comment_response(comment: Dict, storage: InMemoryStorage, current_user_id: Optional[str] = None) -> Dict:
+def create_comment_response(comment: dict, storage: InMemoryStorage, current_user_id: str | None = None) -> dict:
     """Create comment response format"""
     author = storage.users.get(comment["author_id"])
 
@@ -1819,8 +1820,10 @@ async def create_article(body: NewArticleRequest, ctx: Annotated[AuthContext, De
             detail={
                 "errors": {
                     "body": [
-                        f"tagList is an optional list of "
-                        f"less than {MAX_LEN_ARTICLE_TAG_LIST} strings of less than {MAX_LEN_ARTICLE_TAG_LEN} chars"
+                        (
+                            f"tagList is an optional list of "
+                            f"less than {MAX_LEN_ARTICLE_TAG_LIST} strings of less than {MAX_LEN_ARTICLE_TAG_LEN} chars"
+                        )
                     ]
                 }
             },
@@ -2522,7 +2525,7 @@ class TestInMemoryModel(TestCase):
             self.model.add(obj)
             objects.append(obj)
         # Simulate multiple readers
-        for i in range(0, 2):
+        for i in range(2):
             retrieved = self.model.get(str(i + 1))
             self.assertIsNone(retrieved)
         for i in range(2, 5):
@@ -3220,7 +3223,7 @@ class TestStorageContainer(TestCase):
         self.assertEqual(len(container.heap), max_sessions)
         # Add one more session - should evict the oldest (first) session
         new_session_id = "session_new"
-        _, new_storage = container.get_storage(new_session_id)
+        _, _new_storage = container.get_storage(new_session_id)
         # Verify heap properties after eviction and insertion
         self._verify_heap_property(container)
         self._verify_index_consistency(container)
@@ -3649,7 +3652,7 @@ class TestStorageContainer(TestCase):
         # Create session via cookie
         cookie_session_id, cookie_storage = container.get_storage("cookie_session")
         # Create different session and bind JWT to it
-        jwt_session_id, jwt_storage = container.get_storage("jwt_session")
+        jwt_session_id, _jwt_storage = container.get_storage("jwt_session")
         container.jwt_to_session["test_jwt"] = jwt_session_id
         container.jwt_to_session_order.append("test_jwt")
         # Get storage with both cookie and JWT
@@ -3664,7 +3667,7 @@ class TestStorageContainer(TestCase):
         container = _StorageContainer(disable_isolation_mode=False, max_sessions=2)
         # Create max sessions
         container.get_storage("session1")
-        id_2, storage_2 = container.get_storage("session2")
+        id_2, _storage_2 = container.get_storage("session2")
         # Creating third session should trigger eviction
         id_3, storage_3 = container.get_storage("session3")
         # Should have exactly max_sessions entries
@@ -3954,7 +3957,7 @@ class TestStorageContainer(TestCase):
 
 class TestSaveAndLoadData(TestCase):
     TEST_DATA_FILE_PATH = Path("test-file-save-data-b29e89dd-d67a-4ef6-ab2d-09d6204771bf")
-    TEST_DATA_EXPECTED_FILE_CONTENT = {
+    TEST_DATA_EXPECTED_FILE_CONTENT: ClassVar[dict] = {
         "session_2": {
             "users": {
                 "objects": {
@@ -3975,7 +3978,7 @@ class TestSaveAndLoadData(TestCase):
                         "id": "2",
                     },
                 },
-                **{"last_accessed_ids": ["1", "2"]},
+                "last_accessed_ids": ["1", "2"],
                 "current_id_counter": 3,
             },
             "articles": {
@@ -3984,22 +3987,22 @@ class TestSaveAndLoadData(TestCase):
                         "title": "Third Article in Session 2",
                         "description": "This article is in a different session",
                         "body": "Content for the third article in session 2",
-                        **{"tagList": ["session2", "testing"]},
+                        "tagList": ["session2", "testing"],
                         "author": "1",
                         "slug": "third-article-session2",
                         "id": "1",
                     }
                 },
-                **{"last_accessed_ids": ["1"]},
+                "last_accessed_ids": ["1"],
                 "current_id_counter": 2,
             },
             "comments": {
-                **{"objects": {"1": {"body": "Comment from session 2", "author": "2", "article": "1", "id": "1"}}},
-                **{"last_accessed_ids": ["1"]},
+                "objects": {"1": {"body": "Comment from session 2", "author": "2", "article": "1", "id": "1"}},
+                "last_accessed_ids": ["1"],
                 "current_id_counter": 2,
             },
-            **{"follows": [["1", "2"]]},
-            **{"favorites": [["2", "1"]]},
+            "follows": [["1", "2"]],
+            "favorites": [["2", "1"]],
         },
         "session_3": {
             "users": {
@@ -4029,7 +4032,7 @@ class TestSaveAndLoadData(TestCase):
                         "id": "3",
                     },
                 },
-                **{"last_accessed_ids": ["1", "2", "3"]},
+                "last_accessed_ids": ["1", "2", "3"],
                 "current_id_counter": 4,
             },
             "articles": {
@@ -4062,11 +4065,11 @@ class TestSaveAndLoadData(TestCase):
                     "2": {"body": "Second comment in session 3", "author": "3", "article": "1", "id": "2"},
                     "3": {"body": "Third comment in session 3", "author": "1", "article": "2", "id": "3"},
                 },
-                **{"last_accessed_ids": ["1", "2", "3"]},
+                "last_accessed_ids": ["1", "2", "3"],
                 "current_id_counter": 4,
             },
-            **{"follows": [["1", "2"], ["2", "3"], ["3", "1"]]},
-            **{"favorites": [["1", "2"], ["2", "1"], ["3", "1"], ["3", "2"]]},
+            "follows": [["1", "2"], ["2", "3"], ["3", "1"]],
+            "favorites": [["1", "2"], ["2", "1"], ["3", "1"], ["3", "2"]],
         },
         "session_1": {
             "users": {
@@ -4088,7 +4091,7 @@ class TestSaveAndLoadData(TestCase):
                         "id": "2",
                     },
                 },
-                **{"last_accessed_ids": ["2", "1"]},
+                "last_accessed_ids": ["2", "1"],
                 "current_id_counter": 3,
             },
             "articles": {
@@ -4097,7 +4100,7 @@ class TestSaveAndLoadData(TestCase):
                         "title": "First Article",
                         "description": "Description of first article",
                         "body": "Body content of the first article with lots of text",
-                        **{"tagList": ["tech", "programming"]},
+                        "tagList": ["tech", "programming"],
                         "author": "1",
                         "slug": "first-article",
                         "id": "1",
@@ -4106,25 +4109,25 @@ class TestSaveAndLoadData(TestCase):
                         "title": "Second Article",
                         "description": "Description of second article",
                         "body": "Body content of the second article",
-                        **{"tagList": ["science", "research"]},
+                        "tagList": ["science", "research"],
                         "author": "2",
                         "slug": "second-article",
                         "id": "2",
                     },
                 },
-                **{"last_accessed_ids": ["2", "1"]},
+                "last_accessed_ids": ["2", "1"],
                 "current_id_counter": 3,
             },
             "comments": {
                 "objects": {
-                    **{"1": {"body": "Great article! Very informative.", "author": "2", "article": "1", "id": "1"}},
-                    **{"2": {"body": "I disagree but gg.", "author": "1", "article": "1", "id": "2"}},
+                    "1": {"body": "Great article! Very informative.", "author": "2", "article": "1", "id": "1"},
+                    "2": {"body": "I disagree but gg.", "author": "1", "article": "1", "id": "2"},
                 },
-                **{"last_accessed_ids": ["2", "1"]},
+                "last_accessed_ids": ["2", "1"],
                 "current_id_counter": 3,
             },
-            **{"follows": [["1", "2"]]},
-            **{"favorites": [["1", "2"], ["2", "1"]]},
+            "follows": [["1", "2"]],
+            "favorites": [["1", "2"], ["2", "1"]],
         },
     }
 
@@ -4147,7 +4150,6 @@ class TestSaveAndLoadData(TestCase):
     @patch("realworld_dummy_server.log_structured")
     def test_save_data_complex(self, log_structured_mock):
         """Complex test for save_data with multiple storages containing comprehensive data"""
-        global storage_container
         # Create multiple storage sessions with comprehensive data
         _, storage1 = storage_container.get_storage("session_1")
         _, storage2 = storage_container.get_storage("session_2")
@@ -4301,7 +4303,6 @@ class TestSaveAndLoadData(TestCase):
     @patch("realworld_dummy_server.log_structured")
     def test_load_data_complex(self, log_structured_mock):
         """Complex test for load_data using the same expected data structure"""
-        global storage_container
         with self.TEST_DATA_FILE_PATH.open("w") as f:
             json.dump(self.TEST_DATA_EXPECTED_FILE_CONTENT, f)
         load_data()

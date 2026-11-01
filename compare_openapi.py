@@ -28,7 +28,6 @@ from typing import Any
 import httpx
 import yaml
 
-
 # Severity levels
 CRITICAL = "critical"
 WARNING = "warning"
