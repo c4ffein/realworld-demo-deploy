@@ -1753,7 +1753,8 @@ async def list_articles(
             articles = [a for a in articles if a["id"] in fav_article_ids]
         else:
             articles = []
-    articles.sort(key=lambda x: x["createdAt"], reverse=True)
+    # createdAt has millisecond resolution: break ties by insertion order (ids are increasing)
+    articles.sort(key=lambda x: (x["createdAt"], int(x["id"])), reverse=True)
     total = len(articles)
     articles = articles[offset : offset + limit]
     return {
@@ -1770,7 +1771,8 @@ async def get_feed(ctx: Annotated[AuthContext, Depends(get_auth_context)], limit
     require_auth(ctx)
     followed_ids = ctx.storage.follows.targets_for_source(ctx.current_user_id)
     articles = [a for a in ctx.storage.articles.values() if a["author_id"] in followed_ids]
-    articles.sort(key=lambda x: x["createdAt"], reverse=True)
+    # createdAt has millisecond resolution: break ties by insertion order (ids are increasing)
+    articles.sort(key=lambda x: (x["createdAt"], int(x["id"])), reverse=True)
     total = len(articles)
     articles = articles[offset : offset + limit]
     return {
@@ -1985,7 +1987,7 @@ async def get_comments(slug: str, ctx: Annotated[AuthContext, Depends(get_auth_c
     if not article:
         raise HTTPException(status_code=404, detail={"errors": {"article": ["not found"]}})
     comments = [c for c in ctx.storage.comments.values() if c["article_id"] == article["id"]]
-    comments.sort(key=lambda x: x["createdAt"], reverse=True)
+    comments.sort(key=lambda x: (x["createdAt"], int(x["id"])), reverse=True)
     return {"comments": [create_comment_response(c, ctx.storage, ctx.current_user_id) for c in comments]}
 
 
@@ -4312,6 +4314,87 @@ class TestSaveAndLoadData(TestCase):
             loaded_data = json.loads(f.read())
         # Next line actually compares order
         self.assertEqual(json.dumps(loaded_data), json.dumps(self.TEST_DATA_EXPECTED_FILE_CONTENT))
+
+
+class TestListingOrder(TestCase):
+    """Listings are newest first. createdAt only has millisecond resolution, so items created within the same
+    millisecond (which fast clients like the Hurl suite do) must still come back in reverse creation order."""
+
+    FROZEN_TIME = "2026-01-01T00:00:00.000Z"
+
+    @classmethod
+    def setUpClass(cls):
+        from starlette.testclient import TestClient
+
+        cls.client = TestClient(app)
+
+    def setUp(self):
+        self.uid = uuid.uuid4().hex[:8]
+        self.author = f"author_{self.uid}"
+        self.token = self._register(self.author)
+
+    @staticmethod
+    def _auth(token):
+        return {"Authorization": f"Token {token}"}
+
+    def _register(self, username, token=None):
+        """Registering with another user's token lands the new user in that user's session."""
+        body = {"user": {"username": username, "email": f"{username}@test.com", "password": "password123"}}
+        response = self.client.post(f"{PATH_PREFIX}/users", json=body, headers=self._auth(token) if token else {})
+        self.assertEqual(response.status_code, 201, response.text)
+        return response.json()["user"]["token"]
+
+    def _create_articles(self, count):
+        slugs = []
+        with patch("realworld_dummy_server.get_current_time", return_value=self.FROZEN_TIME):
+            for i in range(count):
+                body = {"article": {"title": f"Order {i} {self.uid}", "description": "d", "body": "b"}}
+                response = self.client.post(f"{PATH_PREFIX}/articles", json=body, headers=self._auth(self.token))
+                self.assertEqual(response.status_code, 201, response.text)
+                slugs.append(response.json()["article"]["slug"])
+        return slugs
+
+    def _list(self, **params):
+        response = self.client.get(f"{PATH_PREFIX}/articles", params=params, headers=self._auth(self.token))
+        self.assertEqual(response.status_code, 200, response.text)
+        return response.json()
+
+    def test_articles_created_in_the_same_millisecond_are_listed_newest_first(self):
+        slugs = self._create_articles(3)
+        self.assertEqual([a["slug"] for a in self._list(author=self.author)["articles"]], slugs[::-1])
+
+    def test_pagination_is_stable_within_the_same_millisecond(self):
+        slugs = self._create_articles(2)
+        page1 = self._list(author=self.author, limit=1)
+        page2 = self._list(author=self.author, limit=1, offset=1)
+        self.assertEqual(page1["articlesCount"], 2)
+        self.assertEqual([a["slug"] for a in page1["articles"]], [slugs[1]])
+        self.assertEqual([a["slug"] for a in page2["articles"]], [slugs[0]])
+
+    def test_feed_lists_articles_created_in_the_same_millisecond_newest_first(self):
+        slugs = self._create_articles(3)
+        reader = self._register(f"reader_{self.uid}", token=self.token)
+        response = self.client.post(f"{PATH_PREFIX}/profiles/{self.author}/follow", headers=self._auth(reader))
+        self.assertEqual(response.status_code, 200, response.text)
+        response = self.client.get(f"{PATH_PREFIX}/articles/feed", headers=self._auth(reader))
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual([a["slug"] for a in response.json()["articles"]], slugs[::-1])
+
+    def test_comments_created_in_the_same_millisecond_are_listed_newest_first(self):
+        (slug,) = self._create_articles(1)
+        ids = []
+        with patch("realworld_dummy_server.get_current_time", return_value=self.FROZEN_TIME):
+            for i in range(3):
+                response = self.client.post(
+                    f"{PATH_PREFIX}/articles/{slug}/comments",
+                    json={"comment": {"body": f"comment {i}"}},
+                    headers=self._auth(self.token),
+                )
+                self.assertEqual(response.status_code, 201, response.text)
+                ids.append(response.json()["comment"]["id"])
+        response = self.client.get(f"{PATH_PREFIX}/articles/{slug}/comments", headers=self._auth(self.token))
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual([c["id"] for c in response.json()["comments"]], ids[::-1])
 
 
 class TestOpenAPIDocs(TestCase):
